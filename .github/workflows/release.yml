@@ -31,6 +31,8 @@ jobs:
 
       - name: Package release bundle
         run: node scripts/package-release.mjs
+        env:
+          OPENZCODE_RELEASE_TAG: ${{ github.ref_name }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

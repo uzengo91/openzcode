@@ -14,7 +14,8 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const versionSrc = fs.readFileSync(path.join(ROOT, "packages/cli/src/version.js"), "utf8");
-const VERSION = versionSrc.match(/VERSION\s*=\s*"([^"]+)"/)?.[1];
+const VERSION = (process.env.OPENZCODE_RELEASE_TAG || "").replace(/^v/, "")
+  || versionSrc.match(/VERSION\s*=\s*"([^"]+)"/)?.[1];
 if (!VERSION) { console.error("✗ 无法解析版本号"); process.exit(1); }
 
 const stageDir = path.join(ROOT, "release", "openzcode");
