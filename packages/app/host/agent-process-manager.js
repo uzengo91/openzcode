@@ -8,7 +8,12 @@
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
-const { createRpc } = require("../../cli/src/rpc/jsonrpc");
+
+// monorepo layout requires ../../cli/src/rpc/jsonrpc; the release zip ships a
+// copy of that module at ./jsonrpc.js (see scripts/package-release.mjs)
+let createRpc;
+try { createRpc = require("./jsonrpc").createRpc; }
+catch { createRpc = require("../../cli/src/rpc/jsonrpc").createRpc; }
 
 const CLI_BUNDLE = path.join(__dirname, "..", "..", "cli", "dist", "openzcode.cjs");
 
@@ -30,7 +35,7 @@ class AgentProcessManager {
     // 3) packaged app: Resources/openzcode.cjs
     const candidates = [
       CLI_BUNDLE,
-      path.join(__dirname, "..", "..", "..", "openzcode.cjs"),
+      path.join(__dirname, "..", "..", "openzcode.cjs"),
       path.join(process.resourcesPath || "", "openzcode.cjs"),
     ];
     for (const p of candidates) {

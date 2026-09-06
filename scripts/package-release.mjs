@@ -36,6 +36,9 @@ const appFiles = ["main.js", "preload.js", "package.json"];
 for (const f of appFiles) cp(path.join(ROOT, "packages/app", f), path.join(stageDir, "app", f));
 fs.cpSync(path.join(ROOT, "packages/app/host"), path.join(stageDir, "app", "host"), { recursive: true });
 fs.cpSync(path.join(ROOT, "packages/app/renderer"), path.join(stageDir, "app", "renderer"), { recursive: true });
+// host/ requires a jsonrpc module at ./jsonrpc.js in release layout (monorepo
+// layout resolves it from ../../cli/src instead)
+cp(path.join(ROOT, "packages/cli/src/rpc/jsonrpc.js"), path.join(stageDir, "app", "host", "jsonrpc.js"));
 
 // Launchers
 const launcher = `#!/usr/bin/env sh
