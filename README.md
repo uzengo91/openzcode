@@ -124,12 +124,44 @@ npm run package          # 打 release zip
 - `test:artifact` 是最终验收门：用**构建产物**（`OPENZCODE_BUNDLE` 可指向 release 解压出的 openzcode.cjs）驱动 agent，把**本仓库**作为工作区 —— 模型要读取真实源码并写入 `.oz-itest/`（gitignored），断言逐字节与仓库真值一致；同时验证 **MCP 工具调用**（引擎加载配置的 MCP server，LLM 决策调用 `mcp__calc__add` 并核验结果）。
 - `test:ci` 覆盖 MCP 双 transport（stdio + Streamable HTTP 的握手/tools list/tools call）、技能发现与 frontmatter、命令展开（$ARGUMENTS/$1）、插件安装/移除/启停 —— 全程无 LLM、无外网。
 
+## 自动化（定时任务）
+
+引擎内建调度器（默认 30s tick），自动化持久化在 SQLite，触发时自动开新会话、以设定权限模式无人值守执行，并记录每次运行历史。
+
+```bash
+# CLI
+openzcode automation create --name "每日简报" --prompt "生成工作区简报" --cron "0 9 * * 1-5"
+openzcode automation create --name "巡检" --prompt "检查构建" --every 30 --unit minute --max-runs 10
+openzcode automation create --name "提醒" --prompt "喝水" --delay-minutes 60   # 一次性
+openzcode automation list|runs|run|enable|disable|delete
+# TUI: /automations (run|del|on|off <id>)
+```
+
+- 对话中可直接让模型创建：它有 `CronCreate / CronList / CronUpdate / CronDelete` 四个工具
+- 调度三型：`cron`（5 字段本地时区）、`every`（间隔循环，1-200 minute/hour/day）、`once`（延迟分钟一次性）；`maxRuns` 有限次数后自动完成
+- 防双触发：`nextRunAt` 乐观锁 claim（多进程共享同一 SQLite 只会触发一次）
+- GUI：侧栏「⏰ 自动化」— 列表/创建/暂停/立即运行/删除/运行历史
+
+## 插件市场
+
+市场 = 一个 `marketplace.json` 索引 + 插件包。官方源为本仓库 `marketplace/marketplace.json`（raw.githubusercontent），可添加任意 URL 或本地目录源。安装 = 下载 zip → sha256 校验（如索引提供）→ 解包到用户插件目录 → 热加载。
+
+```bash
+openzcode marketplace list                # 浏览全部源的插件
+openzcode marketplace install commit-helper
+openzcode marketplace add my-src /path/to/dir   # 或 https URL
+# TUI: /plugins ; GUI: 侧栏「▦ 插件市场」— 卡片浏览/一键安装/添加源
+```
+
+插件包优先使用索引里的 `localPath`（仓库内/离线可用），否则下载 `url` 归档。Release CI 会自动把 `marketplace/plugins/*` 打成 zip 附到 Release。
+
 ## RPC 方法面（app-server）
 
 `initialize`、`server/info`、`config/get|setProvider|removeProvider|setDefaultProvider|setOptions|testProvider`、
 `session/create|list|get|messages|todos|send|stop|approve|delete`、
-`mcp/list|reload|toggle|call|userConfig|saveUserConfig`、`skills/list`、`commands/list|expand`、`plugin/list|install|remove`；
-事件通知 `session/event`（`turn_started` / `text_delta` / `message` / `tool_start` / `tool_end` / `permission_request` / `permission_resolved` / `todo_updated` / `skill_loaded` / `usage` / `session_updated` / `turn_done`）、`mcp/status`。
+`mcp/list|reload|toggle|call|userConfig|saveUserConfig`、`skills/list`、`commands/list|expand`、`plugin/list|install|remove`、
+`automation/create|list|get|update|delete|toggle|runs|runNow`、`marketplace/list|install|addSource|removeSource`；
+事件通知 `session/event`（`turn_started` / `text_delta` / `message` / `tool_start` / `tool_end` / `permission_request` / `permission_resolved` / `todo_updated` / `skill_loaded` / `usage` / `session_updated` / `turn_done`）、`mcp/status`、`automation/status`。
 
 ## CI / Release
 

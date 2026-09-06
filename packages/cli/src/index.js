@@ -16,6 +16,9 @@ const { SkillRegistry } = require("./skills");
 const pluginRegistry = require("./plugins");
 const commands = require("./commands");
 const { McpManager } = require("./mcp/manager");
+const automations = require("./automations");
+const marketplace = require("./marketplace");
+const { runAgentTurn } = require("./agent/loop");
 const { VERSION, APP_NAME } = require("./version");
 
 function usage() {
@@ -222,6 +225,130 @@ function cmdCommand(args) {
   } else { console.error("用法: openzcode command list"); process.exit(2); }
 }
 
+async function cmdAutomation(args) {
+  const sub = args[0] || "list";
+  const flags = parseFlags(args.slice(1));
+  const ws = dirs().workspace;
+  // service with a quiet in-process launcher so `automation run` works standalone
+  const storage = require("./storage").getStorage();
+  const service = automations.createService({
+    storage,
+    workspace: ws,
+    launchTurn: async (sid, text, { yolo } = {}) => {
+      const s = storage.getSession(sid);
+      let cfg = configStore.load();
+      if (yolo) cfg = { ...cfg, permissionMode: "yolo" };
+      const plugins = pluginRegistry.discover({ workspace: ws });
+      const skills = new SkillRegistry({ workspace: ws, plugins });
+      const mcp = new McpManager({ workspace: ws, plugins, emit: () => {} });
+      await mcp.load().catch(() => {});
+      const r = await runAgentTurn({
+        session: s, userText: text, provider: configStore.getDefaultProvider(), config: cfg, storage,
+        emit: (e) => {
+          if (e.type === "tool_start") console.error(`${DIM}⚙ ${e.name}${RESET}`);
+          else if (e.type === "turn_done") console.error(`${e.ok ? GREEN + "✓ 回合完成" : RED + "✗ 回合失败"}${RESET}`);
+        },
+        permissionHandler: null,
+        signal: undefined,
+        extensions: { mcpManager: mcp, skills },
+      });
+      mcp.close();
+      return r;
+    },
+    emit: () => {},
+  });
+  const DIM = "\x1b[2m", RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m";
+  const fmt = (a) => `${a.enabled ? "→" : " "} [${a.id}] ${a.name} — ${automations.describeSchedule(a)} · ${a.status} · 已运行 ${a.runCount} 次${a.nextRunAt ? ` · 下次 ${a.nextRunAt.slice(0, 16).replace("T", " ")}` : ""}`;
+  try {
+    switch (sub) {
+      case "list": {
+        const list = service.list();
+        if (!list.length) { console.log("(暂无自动化 — openzcode automation create 或让模型用 CronCreate)"); return; }
+        list.forEach((a) => console.log(fmt(a)));
+        break;
+      }
+      case "create": {
+        if (!flags.name || !flags.prompt) {
+          console.error('用法: openzcode automation create --name "标题" --prompt "任务" (--cron "0 9 * * 1-5" | --every 20 --unit minute | --delay-minutes 5) [--max-runs N] [--mode yolo|ask]');
+          process.exit(2);
+        }
+        const row = service.create({
+          title: flags.name, prompt: flags.prompt,
+          schedule: { cron: flags.cron, interval: flags.every ? Number(flags.every) : undefined, intervalUnit: flags.unit, delayMinutes: flags["delay-minutes"] !== undefined ? Number(flags["delay-minutes"]) : undefined },
+          recurring: flags.recurring !== undefined ? flags.recurring === "true" : undefined,
+          maxRuns: flags["max-runs"] !== undefined ? Number(flags["max-runs"]) : undefined,
+          mode: flags.mode,
+        });
+        console.log(`✓ 已创建: [${row.id}] ${row.name} · 下次 ${row.nextRunAt.slice(0, 16).replace("T", " ")}`);
+        break;
+      }
+      case "delete": service.remove(args[1]); console.log(`✓ 已删除 ${args[1]}`); break;
+      case "enable": case "disable": {
+        const a = service.get(args[1]);
+        if (!a) { console.error(`不存在: ${args[1]}`); process.exit(1); }
+        service.update(args[1], { enabled: sub === "enable" });
+        console.log(`✓ 已${sub === "enable" ? "启用" : "禁用"}: ${a.name}`);
+        break;
+      }
+      case "runs": {
+        const runs = service.runs(args[1]);
+        if (!runs.length) { console.log("(无运行记录)"); return; }
+        for (const r of runs) console.log(`${r.ok ? "✓" : "✗"} ${r.started_at.slice(0, 19).replace("T", " ")} session=${(r.sessionId || r.session_id || "-").toString().slice(0, 13)} ${r.error ? "⚠ " + r.error : ""}`);
+        break;
+      }
+      case "run": {
+        console.log(`${DIM}触发运行 ${args[1]} …${RESET}`);
+        await service.runNow(args[1]);
+        console.log(`${GREEN}✓ 运行完成${RESET}`);
+        break;
+      }
+      default:
+        console.error("用法: openzcode automation list|create|delete|enable|disable|run|runs");
+        process.exit(sub ? 2 : 0);
+    }
+  } catch (e) { console.error(`✗ ${e.message}`); process.exit(1); }
+}
+
+async function cmdMarketplace(args) {
+  const sub = args[0] || "list";
+  try {
+    switch (sub) {
+      case "list": {
+        const all = await marketplace.listMarketplaces();
+        for (const m of all) {
+          console.log(`\n市场 ${m.name} (${m.source})${m.error ? ` ⚠ ${m.error}` : ""}`);
+          for (const p of m.plugins) {
+            console.log(`  ${p._installed ? "[已安装]" : "        "} ${p.name.padEnd(20)} v${p.version}  ${p.description}`);
+          }
+        }
+        break;
+      }
+      case "install": {
+        if (!args[1]) { console.error("用法: openzcode marketplace install <name>"); process.exit(2); }
+        console.log(`${DIM}安装 ${args[1]} …${RESET}`);
+        const all = await marketplace.listMarketplaces();
+        let entry = null;
+        for (const m of all) { entry = m.plugins.find((x) => x.name === args[1]); if (entry) break; }
+        if (!entry) { console.error(`市场中未找到: ${args[1]}`); process.exit(1); }
+        const r = await marketplace.installEntry(entry);
+        console.log(`✓ 已安装 ${r.name} v${r.version} → ${r.dest}`);
+        break;
+      }
+      case "add": {
+        const [name, target] = [args[1], args[2]];
+        if (!name || !target) { console.error("用法: openzcode marketplace add <name> <url-or-dir>"); process.exit(2); }
+        const s = marketplace.addSource({ name, url: /^https?:/i.test(target) ? target : undefined, path: /^https?:/i.test(target) ? undefined : target });
+        console.log(`✓ 已添加市场源: ${s.name} → ${s.url || s.path}`);
+        break;
+      }
+      case "remove": marketplace.removeSource(args[1]); console.log(`✓ 已移除市场源: ${args[1]}`); break;
+      default:
+        console.error("用法: openzcode marketplace list|install <name>|add <name> <src>|remove <name>");
+        process.exit(sub ? 2 : 0);
+    }
+  } catch (e) { console.error(`✗ ${e.message}`); process.exit(1); }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
 
@@ -242,6 +369,8 @@ async function main() {
   if (argv[0] === "skill" || argv[0] === "skills") { cmdSkill(argv.slice(1)); return; }
   if (argv[0] === "plugin" || argv[0] === "plugins") { cmdPlugin(argv.slice(1)); return; }
   if (argv[0] === "command" || argv[0] === "commands") { cmdCommand(argv.slice(1)); return; }
+  if (argv[0] === "automation" || argv[0] === "automations" || argv[0] === "cron") { await cmdAutomation(argv.slice(1)); return; }
+  if (argv[0] === "marketplace" || argv[0] === "market") { await cmdMarketplace(argv.slice(1)); return; }
   if (argv[0] === "help" || argv[0] === "--help" || argv[0] === "-h") { usage(); return; }
 
   if (argv[0] === "-p" || argv[0] === "--print") {

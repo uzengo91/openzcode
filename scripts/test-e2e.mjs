@@ -55,7 +55,7 @@ function check(name, cond, detail = "") {
 }
 
 const child = spawn(process.execPath, [BUNDLE, "app-server", "--stdio"], {
-  env: { ...process.env, OPENZCODE_CONFIG_DIR: path.join(tmp, "data"), OPENZCODE_WORKSPACE: ws },
+  env: { ...process.env, OPENZCODE_CONFIG_DIR: path.join(tmp, "data"), OPENZCODE_WORKSPACE: ws, OPENZCODE_AUTOMATION_TICK_MS: "1000" },
   stdio: ["pipe", "pipe", "pipe"],
 });
 child.stderr.on("data", (d) => process.stderr.write(`[cli] ${d}`));
@@ -181,6 +181,34 @@ try {
   const releaseReport = path.join(ws, "release-report.txt");
   check("Skill: LLM 触发了 skill 工具加载清单", skillUsed);
   check("Skill: 技能指引的产物已生成", fs.existsSync(releaseReport) && fs.readFileSync(releaseReport, "utf8").includes("RELEASE CHECKLIST DONE BY SKILL"));
+
+  // 11. LLM 使用 CronCreate 工具创建自动化
+  eventLog.length = 0;
+  request("session/send", { sessionId: session.id, text: "请用 CronCreate 工具创建一个自动化任务: 标题为『喝水提醒』, 60 分钟后一次性执行, 提示词为『提醒用户喝水』。" }).catch(() => {});
+  const turn5 = await waitForTurnDone(180000);
+  await new Promise((r) => setTimeout(r, 500));
+  const autos = await request("automation/list", {});
+  const drinkAuto = autos.find((a) => a.name.includes("喝水提醒"));
+  check("自动化: LLM 调用 CronCreate 建任务", turn5.ok && !!drinkAuto, JSON.stringify(autos.map((a) => a.name)));
+  check("自动化: 调度类型正确 (一次性 60 分钟)", drinkAuto?.schedule?.kind === "once" && drinkAuto?.schedule?.delayMinutes === 60, JSON.stringify(drinkAuto?.schedule));
+
+  // 12. 调度器无人值守实火: RPC 建 3 秒一次性任务, 引擎自动开新会话并完成
+  eventLog.length = 0;
+  const fireAuto = await request("automation/create", {
+    title: "E2E 实火", prompt: "创建文件 auto-fired.txt, 内容一行: AUTOMATION FIRED OK。完成后简短确认。",
+    delayMinutes: 0.05, mode: "yolo",
+  });
+  let firedRun = null;
+  for (let i = 0; i < 120; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const runs = await request("automation/runs", { id: fireAuto.id });
+    if (runs.length && runs[0].finishedAt) { firedRun = runs[0]; break; }
+  }
+  check("自动化: 调度器触发无人值守运行", !!firedRun, "无完成记录");
+  check("自动化: 无人值守回合成功", firedRun?.ok === true, firedRun?.error || "");
+  check("自动化: 产物文件正确", fs.existsSync(path.join(ws, "auto-fired.txt")) && fs.readFileSync(path.join(ws, "auto-fired.txt"), "utf8").includes("AUTOMATION FIRED OK"));
+  if (drinkAuto) await request("automation/delete", { id: drinkAuto.id });
+  await request("automation/delete", { id: fireAuto.id });
 
   console.log(`\n== 结果: ${passed} 通过, ${failed} 失败 ==`);
   console.log(`   事件总数 ${eventLog.length + " (含首轮)"} | 工具调用: ${[...new Set(toolStarts)].join(", ")}`);

@@ -1,0 +1,5 @@
+{
+  "name": "commit-helper",
+  "version": "0.1.0",
+  "description": "提交助手 — 生成符合 Conventional Commits 的提交信息与变更总结"
+}

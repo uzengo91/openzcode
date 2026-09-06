@@ -258,3 +258,35 @@ body {
 .mcp-add summary { cursor: pointer; font-size: 12px; color: var(--accent); margin-bottom: 8px; }
 .mcp-add .form-grid { margin-top: 8px; }
 .dot.starting { background: var(--yellow); }
+
+/* sidebar quick buttons (自动化 / 插件市场) */
+.sidebar-quick { display: flex; gap: 8px; }
+.quick-btn {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+  background: var(--bg-hover); border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: 8px 6px; cursor: pointer; font-size: 12.5px;
+}
+.quick-btn:hover { background: var(--bg-active); }
+
+/* automations list */
+.automation-list { display: flex; flex-direction: column; gap: 8px; }
+.auto-item { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--bg-hover); }
+.auto-item .a-top { display: flex; align-items: center; gap: 8px; }
+.auto-item .a-name { font-weight: 600; }
+.auto-item .a-sched { margin-left: auto; font-size: 11px; color: var(--accent); font-family: var(--mono); }
+.auto-item .a-meta { font-size: 11.5px; color: var(--text-dim); margin: 6px 0 8px; line-height: 1.5; }
+.auto-item .a-prompt { font-size: 11.5px; color: var(--text-faint); font-family: var(--mono); max-height: 44px; overflow: hidden; }
+.auto-item .a-actions { display: flex; gap: 8px; margin-top: 8px; }
+.auto-item .a-actions .btn { padding: 3px 10px; font-size: 11.5px; }
+.auto-item.completed { opacity: .6; }
+.auto-runs { margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 6px; font-size: 11px; color: var(--text-dim); }
+
+/* marketplace grid */
+.market-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
+.mkt-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--bg-hover); display: flex; flex-direction: column; gap: 6px; }
+.mkt-card .m-name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.mkt-card .m-ver { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+.mkt-card .m-desc { font-size: 12px; color: var(--text-dim); flex: 1; }
+.mkt-card .m-foot { display: flex; align-items: center; gap: 8px; }
+.mkt-card .m-src { font-size: 10.5px; color: var(--text-faint); flex: 1; }
+.hidden2 { display: none !important; }

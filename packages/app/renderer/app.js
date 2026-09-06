@@ -533,6 +533,171 @@ async function saveMcpForm() {
   }
 }
 
+/* ---------------- automations modal ---------------- */
+
+function schedText(a) {
+  const s = a.schedule || {};
+  if (s.kind === "cron") return s.cron;
+  if (s.kind === "once") return `${s.delayMinutes}分钟后·一次`;
+  return `每${s.interval}${{ minute: "分", hour: "时", day: "天" }[s.unit] || s.unit}`;
+}
+
+async function loadAutomations() {
+  const box = $("#automation-list");
+  let list = [];
+  try { list = await rpc("automation/list"); } catch (e) { box.textContent = `加载失败: ${e.message}`; return; }
+  box.textContent = "";
+  if (!list.length) { box.innerHTML = '<div class="about">暂无自动化 — 用下方表单创建，或在对话里让模型用 CronCreate 创建</div>'; return; }
+  for (const a of list) {
+    const el = document.createElement("div");
+    el.className = "auto-item" + (a.status === "completed" ? " completed" : "");
+    el.innerHTML = `
+      <div class="a-top">
+        <span class="dot ${a.enabled ? "ready" : "stopped"}"></span>
+        <span class="a-name">${esc(a.name)}</span>
+        <span class="a-sched">${esc(schedText(a))}</span>
+      </div>
+      <div class="a-meta">
+        ${a.mode === "yolo" ? "🤖 yolo" : "🔒 ask"} · 状态 ${esc(a.status)} · 已运行 ${a.runCount}${a.maxRuns ? "/" + a.maxRuns : ""} 次
+        ${a.nextRunAt ? ` · 下次 <b>${esc(a.nextRunAt.slice(0, 16).replace("T", " "))}</b>` : ""}
+      </div>
+      <div class="a-prompt" title="${esc(a.prompt)}">${esc(a.prompt.slice(0, 120))}</div>
+      <div class="a-actions">
+        <button class="btn a-run">立即运行</button>
+        <button class="btn a-toggle">${a.enabled ? "暂停" : "启用"}</button>
+        <button class="btn a-history">历史</button>
+        <button class="btn danger a-del">删除</button>
+      </div>
+      <div class="a-runs hidden"></div>`;
+    el.querySelector(".a-run").addEventListener("click", async () => {
+      try { await rpc("automation/runNow", { id: a.id }); toast(`自动化「${a.name}」已触发`, "info"); await loadAutomations(); }
+      catch (e) { toast(`触发失败: ${e.message}`); }
+    });
+    el.querySelector(".a-toggle").addEventListener("click", async () => {
+      await rpc("automation/toggle", { id: a.id }).catch((e) => toast(e.message));
+      await loadAutomations();
+    });
+    el.querySelector(".a-del").addEventListener("click", async () => {
+      await rpc("automation/delete", { id: a.id }).catch((e) => toast(e.message));
+      await loadAutomations();
+    });
+    el.querySelector(".a-history").addEventListener("click", async () => {
+      const pane = el.querySelector(".a-runs");
+      if (!pane.classList.contains("hidden")) { pane.classList.add("hidden"); return; }
+      const runs = await rpc("automation/runs", { id: a.id }).catch(() => []);
+      pane.innerHTML = runs.length
+        ? runs.map((r) => `<div>${r.ok ? "✓" : "✗"} ${esc((r.startedAt || "").slice(0, 19).replace("T", " "))} ${r.error ? "⚠ " + esc(r.error) : ""} <span class="t-status ${r.ok ? "ok" : "error"}">${r.sessionId ? "会话 " + esc(r.sessionId.slice(0, 13)) + "…" : ""}</span></div>`).join("")
+        : "<div>(无运行记录)</div>";
+      pane.classList.remove("hidden");
+    });
+    box.appendChild(el);
+  }
+}
+
+function bindAutomationsModal() {
+  $("#btn-automations").addEventListener("click", async () => {
+    $("#automations-modal").classList.remove("hidden");
+    await loadAutomations();
+  });
+  $("#btn-close-automations").addEventListener("click", () => $("#automations-modal").classList.add("hidden"));
+  $("#automations-modal").addEventListener("click", (e) => {
+    if (e.target === $("#automations-modal")) $("#automations-modal").classList.add("hidden");
+  });
+  $("#auto-refresh").addEventListener("click", loadAutomations);
+
+  $("#auto-kind").addEventListener("change", () => {
+    const kind = $("#auto-kind").value;
+    $("#auto-cron-wrap").classList.toggle("hidden", kind !== "cron");
+    $("#auto-every-wrap").classList.toggle("hidden", kind !== "every");
+    $("#auto-delay-wrap").classList.toggle("hidden", kind !== "once");
+  });
+
+  $("#auto-create").addEventListener("click", async () => {
+    const msg = $("#auto-msg");
+    const kind = $("#auto-kind").value;
+    const params = {
+      title: $("#auto-name").value.trim(),
+      prompt: $("#auto-prompt").value.trim(),
+      mode: $("#auto-mode").value,
+      maxRuns: $("#auto-maxruns").value ? Number($("#auto-maxruns").value) : undefined,
+    };
+    if (kind === "cron") params.cron = $("#auto-cron").value.trim();
+    else if (kind === "every") { params.interval = Number($("#auto-every").value); params.intervalUnit = $("#auto-unit").value; }
+    else params.delayMinutes = Number($("#auto-delay").value);
+    if (!params.title || !params.prompt) { msg.textContent = "名称与提示词必填"; msg.className = "test-result err"; return; }
+    msg.textContent = "创建中…"; msg.className = "test-result";
+    try {
+      const row = await rpc("automation/create", params);
+      msg.textContent = `已创建 ✓ 下次 ${row.nextRunAt?.slice(0, 16).replace("T", " ") || "-"}`;
+      msg.className = "test-result ok";
+      $("#auto-name").value = ""; $("#auto-prompt").value = ""; $("#auto-maxruns").value = "";
+      await loadAutomations();
+    } catch (e) {
+      msg.textContent = e.message; msg.className = "test-result err";
+    }
+  });
+}
+
+/* ---------------- marketplace modal ---------------- */
+
+async function loadMarketplace() {
+  const box = $("#marketplace-list");
+  box.innerHTML = '<div class="about">加载市场…</div>';
+  const groups = await rpc("marketplace/list").catch((e) => [{ name: "错误", plugins: [], error: e.message }]);
+  box.textContent = "";
+  let any = false;
+  for (const g of groups) {
+    for (const p of g.plugins) {
+      any = true;
+      const card = document.createElement("div");
+      card.className = "mkt-card";
+      card.innerHTML = `
+        <div class="m-name">${esc(p.name)} <span class="m-ver">v${esc(p.version)}</span></div>
+        <div class="m-desc">${esc(p.description || "")}</div>
+        <div class="m-foot">
+          <span class="m-src">${esc(g.name)}${p._installed ? " · 已安装" : ""}</span>
+          <button class="btn ${p._installed ? "" : "primary"} m-install">${p._installed ? "重装" : "安装"}</button>
+        </div>`;
+      card.querySelector(".m-install").addEventListener("click", async () => {
+        card.querySelector(".m-install").textContent = "安装中…";
+        try {
+          await rpc("marketplace/install", { name: p.name, marketplace: g.name });
+          toast(`插件 ${p.name} 安装成功`, "info");
+          await loadMarketplace();
+        } catch (e) {
+          toast(`安装失败: ${e.message}`);
+          card.querySelector(".m-install").textContent = "安装";
+        }
+      });
+      box.appendChild(card);
+    }
+  }
+  if (!any) box.innerHTML = '<div class="about">市场暂无插件</div>';
+}
+
+function bindMarketplaceModal() {
+  $("#btn-marketplace").addEventListener("click", async () => {
+    $("#marketplace-modal").classList.remove("hidden");
+    await loadMarketplace();
+  });
+  $("#btn-close-marketplace").addEventListener("click", () => $("#marketplace-modal").classList.add("hidden"));
+  $("#marketplace-modal").addEventListener("click", (e) => {
+    if (e.target === $("#marketplace-modal")) $("#marketplace-modal").classList.add("hidden");
+  });
+  $("#mkt-refresh").addEventListener("click", loadMarketplace);
+  $("#mkt-add").addEventListener("click", async () => {
+    const msg = $("#mkt-msg");
+    const target = $("#mkt-source").value.trim();
+    if (!target) { msg.textContent = "请填写 URL 或目录"; msg.className = "test-result err"; return; }
+    try {
+      await rpc("marketplace/addSource", { name: $("#mkt-name").value.trim() || undefined, url: /^https?:/i.test(target) ? target : undefined, path: /^https?:/i.test(target) ? undefined : target });
+      msg.textContent = "已添加 ✓"; msg.className = "test-result ok";
+      $("#mkt-name").value = ""; $("#mkt-source").value = "";
+      await loadMarketplace();
+    } catch (e) { msg.textContent = e.message; msg.className = "test-result err"; }
+  });
+}
+
 /* ---------------- settings ---------------- */
 
 async function loadConfig() {
@@ -641,6 +806,8 @@ async function testProviderForm() {
 
 function bindEvents() {
   $("#btn-new-session").addEventListener("click", newSession);
+  bindAutomationsModal();
+  bindMarketplaceModal();
 
   const input = $("#input");
   input.addEventListener("keydown", (e) => {

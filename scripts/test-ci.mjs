@@ -88,9 +88,15 @@ const check = (name, cond, detail = "") => {
 };
 
 const child = spawn(process.execPath, [BUNDLE, "app-server", "--stdio"], {
-  env: { ...process.env, OPENZCODE_CONFIG_DIR: path.join(tmp, "data"), OPENZCODE_WORKSPACE: ws },
+  env: {
+    ...process.env,
+    OPENZCODE_CONFIG_DIR: path.join(tmp, "data"),
+    OPENZCODE_WORKSPACE: ws,
+    OPENZCODE_AUTOMATION_TICK_MS: "1000", // fast scheduler for CI
+  },
   stdio: ["pipe", "pipe", "pipe"],
 });
+child.stderr.on("data", (d) => process.stderr.write(`[cli] ${d}`));
 
 const pending = new Map();
 const events = [];
@@ -128,7 +134,7 @@ try {
 
   // config registry (fake provider, masked echo)
   const cfg = await request("config/setProvider", {
-    name: "fake", baseUrl: "https://ci-invalid.local/v1", apiKey: "sk-test-1234567890",
+    name: "fake", baseUrl: "https://127.0.0.1:9/v1", apiKey: "sk-test-1234567890",
     model: "dummy-model", protocol: "openai", setDefault: true,
   });
   check("provider 保存 + 默认标记", cfg.providers.length === 1 && cfg.defaultProviderId === cfg.providers[0].id);
@@ -238,6 +244,71 @@ try {
   await request("plugin/remove", { name: "demo-plugin" }, 30000);
   const plist2 = await request("plugin/list", {});
   check("插件移除", !plist2.some((p) => p.name === "demo-plugin"));
+
+  /* ============ automations ============ */
+
+  // CRUD + schedule validation
+  try { await request("automation/create", { title: "bad", prompt: "x", cron: "99 * * * *" }); check("非法 cron 应报错", false); }
+  catch (e) { check("非法 cron 应报错", /越界|无效/.test(e.message), e.message); }
+
+  const created = await request("automation/create", {
+    title: "CI 每日简报", prompt: "生成一份简报", cron: "0 9 * * 1-5", mode: "yolo",
+  });
+  check("automation/create (cron)", !!created.id && !!created.nextRunAt, JSON.stringify(created));
+  const autoList = await request("automation/list", {});
+  check("automation/list 可见", autoList.some((a) => a.id === created.id && a.status === "active"));
+
+  const toggledAuto = await request("automation/toggle", { id: created.id });
+  check("automation/toggle 禁用", toggledAuto.enabled === false);
+  const updatedAuto = await request("automation/update", { id: created.id, cron: "*/30 * * * *", enabled: true });
+  check("automation/update 改调度并重新启用", updatedAuto.schedule?.cron === "*/30 * * * *" && updatedAuto.enabled === true, JSON.stringify(updatedAuto));
+  const runs0 = await request("automation/runs", { id: created.id });
+  check("automation/runs 空记录", Array.isArray(runs0) && runs0.length === 0);
+
+  // real scheduler fire: 3s one-shot (provider unreachable → turn fails fast, but run MUST be recorded + automation completes)
+  const onceAuto = await request("automation/create", {
+    title: "CI 一次性", prompt: "no-op", delayMinutes: 0.05, mode: "yolo",
+  });
+  let fired = null;
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const a = (await request("automation/list", {})).find((x) => x.id === onceAuto.id);
+    if (a && a.runCount >= 1) { fired = a; break; }
+  }
+  check("调度器真实触发一次性任务", !!fired && fired.status === "completed" && fired.runCount === 1, JSON.stringify(fired));
+  const runs1 = await request("automation/runs", { id: onceAuto.id });
+  check("运行记录已落盘 (含 sessionId)", runs1.length === 1 && !!runs1[0].sessionId, JSON.stringify(runs1));
+  const autoSession = await request("session/messages", { sessionId: runs1[0].sessionId });
+  check("自动化产生了真实会话消息", autoSession.some((m) => m.role === "user"));
+  await request("automation/delete", { id: onceAuto.id });
+  await request("automation/delete", { id: created.id });
+
+  /* ============ marketplace (local source, no network) ============ */
+
+  const mktDir = path.join(tmp, "marketplace");
+  fs.mkdirSync(path.join(mktDir, "plugins"), { recursive: true });
+  fs.cpSync(path.join(REPO, "examples/plugins/demo-plugin"), path.join(mktDir, "plugins", "demo-plugin"), { recursive: true });
+  fs.writeFileSync(path.join(mktDir, "marketplace.json"), JSON.stringify({
+    name: "test-market",
+    plugins: [
+      { name: "demo-plugin", version: "0.1.0", description: "本地市场测试插件", localPath: "plugins/demo-plugin" },
+      { name: "ghost-plugin", version: "9.9.9", description: "无本地且无 URL 的坏条目", localPath: "plugins/does-not-exist" },
+    ],
+  }));
+  await request("marketplace/addSource", { name: "test-market", path: mktDir });
+  const mktList = await request("marketplace/list", {});
+  const testMkt = mktList.find((m) => m.name === "test-market");
+  check("marketplace/list 本地源", !!testMkt && testMkt.plugins.length === 2, JSON.stringify(mktList.map((m) => m.name)));
+  const installedMkt = await request("marketplace/install", { name: "demo-plugin", marketplace: "test-market" });
+  check("marketplace/install 本地安装", !!installedMkt.installed?.name, JSON.stringify(installedMkt).slice(0, 150));
+  const plistMkt = await request("plugin/list", {});
+  check("市场安装后插件可见", plistMkt.some((p) => p.name === "demo-plugin"));
+  let ghostError = null;
+  try { await request("marketplace/install", { name: "ghost-plugin", marketplace: "test-market" }); }
+  catch (e) { ghostError = e.message; }
+  check("坏条目安装报错", !!ghostError, ghostError || "no error");
+  await request("plugin/remove", { name: "demo-plugin" });
+  await request("marketplace/removeSource", { name: "test-market" });
 
   console.log(`\n== CI 结果: ${passed} 通过, ${failed} 失败 ==`);
   process.exitCode = failed ? 1 : 0;

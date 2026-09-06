@@ -445,6 +445,75 @@ const TOOLS = [
       return Promise.resolve(r);
     },
   },
+  {
+    name: "CronCreate",
+    description: "创建一个定时自动化任务: 到点后引擎会以该提示词自动开起新会话并执行。三种调度方式二选一: cron 表达式 / interval+intervalUnit 循环 / delayMinutes 一次性延迟。",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "自动化标题(保留用户的自然语言时间表述,如 '每20分钟' '每天早上9点')" },
+        prompt: { type: "string", description: "到点后要执行的完整任务提示词(必须自包含,不依赖当前对话上下文)" },
+        cron: { type: "string", description: "5字段 cron 表达式(本地时区), 如 '0 9 * * 1-5'" },
+        interval: { type: "number", description: "循环间隔数值(1-200), 与 intervalUnit 搭配" },
+        intervalUnit: { type: "string", enum: ["minute", "hour", "day"], description: "循环间隔单位" },
+        delayMinutes: { type: "number", description: "一次性延迟分钟数(与 cron/interval 互斥)" },
+        recurring: { type: "boolean", description: "是否循环, 默认 cron/interval 为 true, delayMinutes 为 false" },
+        maxRuns: { type: "number", description: "有限次数: 最多执行 N 次后自动完成(可选)" },
+        mode: { type: "string", enum: ["yolo", "ask"], description: "无人值守执行权限模式, 默认 yolo" },
+      },
+      required: ["title", "prompt"],
+    },
+    run: (input, ctx) => {
+      if (!ctx.automations) return Promise.resolve(errResult("自动化系统不可用"));
+      return ctx.automations.createFromTool(input);
+    },
+  },
+  {
+    name: "CronList",
+    description: "列出当前全部自动化任务(含状态与下次运行时间)。",
+    parameters: { type: "object", properties: {} },
+    run: (input, ctx) => {
+      if (!ctx.automations) return Promise.resolve(errResult("自动化系统不可用"));
+      return Promise.resolve(ctx.automations.listForTool());
+    },
+  },
+  {
+    name: "CronUpdate",
+    description: "修改自动化任务: 更换调度/提示词/启停等。未提供的字段保持不变。",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "自动化 id (CronList 获得)" },
+        title: { type: "string" },
+        prompt: { type: "string" },
+        cron: { type: "string" },
+        interval: { type: "number" },
+        intervalUnit: { type: "string", enum: ["minute", "hour", "day"] },
+        delayMinutes: { type: "number" },
+        enabled: { type: "boolean" },
+        maxRuns: { type: "number" },
+        mode: { type: "string", enum: ["yolo", "ask"] },
+      },
+      required: ["id"],
+    },
+    run: (input, ctx) => {
+      if (!ctx.automations) return Promise.resolve(errResult("自动化系统不可用"));
+      return Promise.resolve(ctx.automations.updateFromTool(input));
+    },
+  },
+  {
+    name: "CronDelete",
+    description: "删除一个自动化任务。",
+    parameters: {
+      type: "object",
+      properties: { id: { type: "string", description: "自动化 id" } },
+      required: ["id"],
+    },
+    run: (input, ctx) => {
+      if (!ctx.automations) return Promise.resolve(errResult("自动化系统不可用"));
+      return Promise.resolve(ctx.automations.deleteFromTool(String(input.id || "")));
+    },
+  },
 ];
 
 const TOOL_MAP = new Map(TOOLS.map((t) => [t.name, t]));

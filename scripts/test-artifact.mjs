@@ -180,11 +180,37 @@ try {
 
   // ---- Task 5: MCP tool — agent must call the configured mcp server ----
   r = await runTask(session.id, `请使用 MCP 工具 mcp__calc__add 计算 11+22，把结果数字写入 .oz-itest/check-mcp.txt（一行，只要数字）。`);
-  check("任务5: agent 调用了 MCP 工具 mcp__calc__add", r.ev.ok === true, r.failures.join(" | ") || r.ev.error || "");
+  check("任务5: agent 调用了 MCP 工具 mcp__calc__add", r.ok, r.failures.join(" | ") || r.ev.error || "");
   const gotMcp = fs.existsSync(path.join(SCRATCH, "check-mcp.txt"))
     ? fs.readFileSync(path.join(SCRATCH, "check-mcp.txt"), "utf8").trim()
     : null;
   check("任务5: MCP 计算结果正确 (33)", gotMcp === "33", `实际: ${gotMcp}`);
+
+  // ---- Task 6: marketplace — local official index shipped in this repo ----
+  try {
+    await request("marketplace/addSource", { name: "repo-local", path: path.join(REPO, "marketplace") });
+    const groups = await request("marketplace/list", {});
+    const local = groups.find((g) => g.name === "repo-local");
+    check("任务6: 市场索引加载 (本地官方源)", !!local && local.plugins.some((p) => p.name === "commit-helper"), JSON.stringify(groups.map((g) => [g.name, g.plugins.length, g.error])));
+    const installed = await request("marketplace/install", { name: "commit-helper", marketplace: "repo-local" });
+    check("任务6: 从市场安装 commit-helper", !!installed.installed?.name, JSON.stringify(installed).slice(0, 150));
+    const plist = await request("plugin/list", {});
+    check("任务6: 安装后插件可见且贡献技能", plist.some((p) => p.name === "commit-helper"));
+    const skills = await request("skills/list", {});
+    check("任务6: 插件贡献的 commit-message 技能可用", skills.some((s) => s.name === "commit-message"));
+    await request("plugin/remove", { name: "commit-helper" });
+    await request("marketplace/removeSource", { name: "repo-local" });
+  } catch (e) {
+    check("任务6: 市场流程", false, e.message);
+  }
+
+  // ---- Task 7: LLM creates an automation via CronCreate ----
+  r = await runTask(session.id, `请用 CronCreate 创建一个自动化任务: 标题『artifact 提醒』, 120 分钟后一次性执行, 提示词『提醒检查产物』。`);
+  check("任务7: agent 调用 CronCreate 成功", r.ok, r.failures.join(" | ") || r.ev.error || "");
+  const autos = await request("automation/list", {});
+  const created = autos.find((a) => a.name.includes("artifact 提醒"));
+  check("任务7: 自动化已持久化 (一次性 120 分钟)", !!created && created.schedule?.kind === "once", JSON.stringify(autos.map((a) => a.name)));
+  if (created) await request("automation/delete", { id: created.id });
 
   // ---- persistence sanity ----
   const msgs = await request("session/messages", { sessionId: session.id });

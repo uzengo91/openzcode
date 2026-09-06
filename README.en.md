@@ -123,12 +123,44 @@ npm run package          # build the release zip
 - `test:e2e` and `test:artifact` need a real model service: set `OPENZCODE_TEST_API_KEY` (optionally `OPENZCODE_TEST_BASE_URL`, `OPENZCODE_TEST_MODEL`), or configure a default provider in `~/.openzcode/config.json`. Keys never enter the repository.
 - `test:artifact` is the final acceptance gate: it drives the agent with the **built artifact** (`OPENZCODE_BUNDLE` may point at the openzcode.cjs extracted from a release zip) using **this repository** as the workspace — the model must read real source files (`packages/cli/src/version.js`, `README.md`, `packages/app/package.json`) and write extracted facts into `.oz-itest/` (gitignored); assertions compare the bytes on disk against ground truth parsed from the repo itself.
 
+## Automations (scheduled tasks)
+
+The engine hosts a scheduler (30s tick by default). Automations persist in SQLite; when due, the engine opens a new session and runs the prompt unattended with the configured permission mode, recording every run.
+
+```bash
+# CLI
+openzcode automation create --name "Daily brief" --prompt "Summarize workspace changes" --cron "0 9 * * 1-5"
+openzcode automation create --name "Check builds" --prompt "Check CI" --every 30 --unit minute --max-runs 10
+openzcode automation create --name "Reminder" --prompt "Drink water" --delay-minutes 60   # one-shot
+openzcode automation list|runs|run|enable|disable|delete
+# TUI: /automations (run|del|on|off <id>)
+```
+
+- In chat, just ask the model — it has `CronCreate / CronList / CronUpdate / CronDelete` tools
+- Three schedule kinds: `cron` (5-field, local timezone), `every` (interval loop 1-200 minute/hour/day), `once` (delay minutes); `maxRuns` auto-completes after N runs
+- No double-fire: optimistic claim on `nextRunAt` (one trigger even with multiple processes sharing the SQLite db)
+- GUI: sidebar "⏰ Automations" — list/create/pause/run-now/delete/history
+
+## Plugin Marketplace
+
+A marketplace = a `marketplace.json` index + plugin packages. The official source is this repo's `marketplace/marketplace.json` (raw.githubusercontent); add any URL or local-directory source. Install = download zip → verify sha256 (when provided) → unpack into the user plugin dir → hot reload.
+
+```bash
+openzcode marketplace list                # browse plugins across sources
+openzcode marketplace install commit-helper
+openzcode marketplace add my-src /path/to/dir   # or an https URL
+# TUI: /plugins ; GUI: sidebar "▦ Marketplace" — cards, one-click install, add sources
+```
+
+Installers prefer the index's `localPath` (works in-repo/offline) and otherwise download the `url` archive. Release CI zips every `marketplace/plugins/*` dir and attaches them to the Release.
+
 ## RPC Surface (app-server)
 
 `initialize`, `server/info`, `config/get|setProvider|removeProvider|setDefaultProvider|setOptions|testProvider`,
 `session/create|list|get|messages|todos|send|stop|approve|delete`,
-`mcp/list|reload|toggle|call|userConfig|saveUserConfig`, `skills/list`, `commands/list|expand`, `plugin/list|install|remove`;
-event notification `session/event` (`turn_started` / `text_delta` / `message` / `tool_start` / `tool_end` / `permission_request` / `permission_resolved` / `todo_updated` / `skill_loaded` / `usage` / `session_updated` / `turn_done`), `mcp/status`.
+`mcp/list|reload|toggle|call|userConfig|saveUserConfig`, `skills/list`, `commands/list|expand`, `plugin/list|install|remove`,
+`automation/create|list|get|update|delete|toggle|runs|runNow`, `marketplace/list|install|addSource|removeSource`;
+event notification `session/event` (`turn_started` / `text_delta` / `message` / `tool_start` / `tool_end` / `permission_request` / `permission_resolved` / `todo_updated` / `skill_loaded` / `usage` / `session_updated` / `turn_done`), `mcp/status`, `automation/status`.
 
 ## CI / Release
 

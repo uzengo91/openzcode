@@ -173,6 +173,7 @@ async function runAgentTurn({
               result = await tool.run(tc.input ?? {}, {
                 workspace, sessionId, storage, config, emit, signal,
                 skills: extensions.skills,
+                automations: extensions.automations,
               });
             } catch (err) {
               result = { ok: false, output: `工具执行异常: ${err.message}` };

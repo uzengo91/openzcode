@@ -1,0 +1,20 @@
+{
+  "name": "openzcode-official",
+  "description": "OpenZCode 官方插件市场",
+  "plugins": [
+    {
+      "name": "demo-plugin",
+      "version": "0.1.0",
+      "description": "示例插件 — 同时贡献技能 + 命令 + MCP 服务器",
+      "localPath": "../examples/plugins/demo-plugin",
+      "url": "https://github.com/uzengo91/openzcode/releases/latest/download/plugin-demo-plugin.zip"
+    },
+    {
+      "name": "commit-helper",
+      "version": "0.1.0",
+      "description": "提交助手 — Conventional Commits 提交信息生成与变更总结",
+      "localPath": "plugins/commit-helper",
+      "url": "https://github.com/uzengo91/openzcode/releases/latest/download/plugin-commit-helper.zip"
+    }
+  ]
+}

@@ -34,8 +34,19 @@ jobs:
         env:
           OPENZCODE_RELEASE_TAG: ${{ github.ref_name }}
 
+      - name: Package marketplace plugins
+        run: |
+          mkdir -p release/mkt
+          for d in marketplace/plugins/*/; do
+            name=$(basename "$d")
+            (cd marketplace/plugins && zip -qr "$OLDPWD/release/mkt/plugin-$name.zip" "$name")
+            echo "packed plugin-$name.zip"
+          done
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*.zip
+          files: |
+            release/*.zip
+            release/mkt/*.zip
           generate_release_notes: true

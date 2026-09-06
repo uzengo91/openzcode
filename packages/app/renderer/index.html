@@ -21,6 +21,11 @@
     <aside id="sidebar">
       <button id="btn-new-session" class="btn primary block">＋ 新会话</button>
 
+      <div class="sidebar-quick">
+        <button id="btn-automations" class="quick-btn">⏰ 自动化</button>
+        <button id="btn-marketplace" class="quick-btn">▦ 插件市场</button>
+      </div>
+
       <div class="workspace-row" title="切换工作目录">
         <span class="ws-icon">📁</span>
         <span id="workspace-path" class="ws-path">…</span>
@@ -78,6 +83,79 @@
         </div>
       </footer>
     </main>
+  </div>
+
+  <!-- ============ Automations modal ============ -->
+  <div id="automations-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>⏰ 自动化</h2>
+        <div>
+          <button id="auto-refresh" class="icon-btn" title="刷新">↻</button>
+          <button id="btn-close-automations" class="icon-btn">✕</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <section class="settings-section">
+          <div id="automation-list" class="automation-list"></div>
+        </section>
+        <section class="settings-section">
+          <h3>新建自动化</h3>
+          <div class="form-grid">
+            <label>名称<input id="auto-name" placeholder="每天早上播报" /></label>
+            <label>权限模式
+              <select id="auto-mode">
+                <option value="yolo">yolo（无人值守自动放行）</option>
+                <option value="ask">ask（危险操作需人工，无人值守时会被拒）</option>
+              </select>
+            </label>
+            <label class="span2">提示词（到点后自动开新会话执行，必须自包含）<textarea id="auto-prompt" rows="3" placeholder="查看当前目录变更并生成一份简报"></textarea></label>
+            <label>调度类型
+              <select id="auto-kind">
+                <option value="cron">cron 表达式</option>
+                <option value="every">固定间隔循环</option>
+                <option value="once">一次性延迟</option>
+              </select>
+            </label>
+            <label id="auto-maxruns-wrap">最多执行次数（可空）<input id="auto-maxruns" type="number" min="1" placeholder="不限" /></label>
+            <label class="span2" id="auto-cron-wrap">cron 表达式（本地时区）<input id="auto-cron" placeholder="0 9 * * 1-5" /></label>
+            <label class="span2 hidden" id="auto-every-wrap">间隔 <input id="auto-every" type="number" min="1" style="width:80px" /> <select id="auto-unit"><option value="minute">分钟</option><option value="hour">小时</option><option value="day">天</option></select></label>
+            <label class="span2 hidden" id="auto-delay-wrap">延迟分钟数 <input id="auto-delay" type="number" min="1" style="width:80px" /></label>
+          </div>
+          <div class="form-actions">
+            <button id="auto-create" class="btn primary">创建</button>
+            <span id="auto-msg" class="test-result"></span>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Marketplace modal ============ -->
+  <div id="marketplace-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>▦ 插件市场</h2>
+        <div>
+          <button id="mkt-refresh" class="icon-btn" title="刷新">↻</button>
+          <button id="btn-close-marketplace" class="icon-btn">✕</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div id="marketplace-list" class="market-list"></div>
+        <section class="settings-section">
+          <h3>添加市场源</h3>
+          <div class="form-grid">
+            <label>名称<input id="mkt-name" placeholder="my-market" /></label>
+            <label class="span2">URL 或本地目录<input id="mkt-source" placeholder="https://…/marketplace.json 或 /path/to/dir" /></label>
+          </div>
+          <div class="form-actions">
+            <button id="mkt-add" class="btn">添加</button>
+            <span id="mkt-msg" class="test-result"></span>
+          </div>
+        </section>
+      </div>
+    </div>
   </div>
 
   <!-- ============ Settings modal ============ -->

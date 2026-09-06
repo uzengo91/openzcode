@@ -13,6 +13,7 @@ const { SkillRegistry } = require("../skills");
 const pluginRegistry = require("../plugins");
 const commands = require("../commands");
 const { McpManager } = require("../mcp/manager");
+const automations = require("../automations");
 const { VERSION, APP_NAME } = require("../version");
 
 const DIM = "\x1b[2m", RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", CYAN = "\x1b[36m", YELLOW = "\x1b[33m";
@@ -43,6 +44,38 @@ async function runTui() {
   async function ensureMcp() {
     if (!mcpLoaded) { rediscoverExtensions(); await mcp.load().catch(() => {}); mcpLoaded = true; }
   }
+
+  // automations: agent Cron* tools + unattended scheduler (quiet output)
+  let tuiAutoRef = { v: null };
+  const tuiAuto = automations.createService({
+    storage,
+    workspace,
+    launchTurn: async (sid, text, { yolo } = {}) => {
+      const s = storage.getSession(sid);
+      if (!s) throw new Error("会话不存在");
+      let cfg = configStore.load();
+      if (yolo) cfg = { ...cfg, permissionMode: "yolo" };
+      await ensureMcp();
+      return runAgentTurn({
+        session: s, userText: text, provider: configStore.getDefaultProvider(), config: cfg, storage,
+        emit: (event) => {
+          if (event.type === "tool_start") console.log(`${DIM}⏰ [${s.title}] ⚙ ${fmtToolInput(event.name, event.input)}${RESET}`);
+          else if (event.type === "turn_done") console.log(`${DIM}⏰ [${s.title}] ${event.ok ? "完成" : "失败: " + (event.error || "")}${RESET}`);
+        },
+        permissionHandler: null,
+        signal: undefined,
+        extensions: { mcpManager: mcp, skills, automations: tuiAutoRef.v },
+      });
+    },
+    emit: (e) => {
+      if (e.type === "automation_started") console.log(`${DIM}⏰ 自动化触发: ${e.name} (会话 ${e.sessionId.slice(0, 13)}…)${RESET}`);
+      else if (e.type === "automation_finished") console.log(`${DIM}⏰ 自动化${e.ok ? "完成" : "失败"}: ${e.name}${RESET}`);
+    },
+  });
+  tuiAutoRef.v = tuiAuto;
+  const AUTO_TICK = Math.max(1000, Number(process.env.OPENZCODE_AUTOMATION_TICK_MS) || 30000);
+  const autoTimer = setInterval(() => tuiAuto.tickNow().catch(() => {}), AUTO_TICK);
+  if (autoTimer.unref) autoTimer.unref();
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   let running = false;
@@ -129,7 +162,7 @@ async function runTui() {
         emit,
         permissionHandler,
         signal: abortCtrl.signal,
-        extensions: { mcpManager: mcp, skills },
+        extensions: { mcpManager: mcp, skills, automations: tuiAuto },
       });
     } finally {
       running = false;
@@ -161,6 +194,7 @@ async function runTui() {
   /plugins          列出已安装插件
   /commands         列出自定义 slash 命令
   /reload           重载插件/技能/MCP 配置
+  /automations      自动化任务列表 (run|del|on|off <id>)
   /quit             退出`);
         break;
       case "new":
@@ -266,6 +300,25 @@ async function runTui() {
         await mcp.reload().catch(() => {});
         const l = mcp.list();
         console.log(`已重载: 插件 ${currentPlugins.length} 个, MCP server ${l.length} 个, 技能 ${skills.list().length} 个`);
+        break;
+      }
+      case "automations": case "auto": {
+        const sub = (rest[0] || "").toLowerCase();
+        const target = rest[1];
+        if (sub === "run" && target) {
+          try { await tuiAuto.runNow(target); console.log(`${GREEN}✓ 已触发运行${RESET}`); }
+          catch (e) { console.log(`${RED}✗ ${e.message}${RESET}`); }
+          break;
+        }
+        if (sub === "del" && target) { try { tuiAuto.remove(target); console.log("✓ 已删除"); } catch (e) { console.log(`✗ ${e.message}`); } break; }
+        if ((sub === "on" || sub === "off") && target) {
+          try { const a = tuiAuto.toggle(target); console.log(`✓ ${a.enabled ? "已启用" : "已禁用"}: ${a.name}`); } catch (e) { console.log(`✗ ${e.message}`); }
+          break;
+        }
+        const list = tuiAuto.list();
+        if (!list.length) { console.log("(暂无自动化 — 让模型用 CronCreate 创建, 或 openzcode automation create)"); break; }
+        for (const a of list) console.log(`${a.enabled ? "→" : " "} [${a.id}] ${a.name} — ${automations.describeSchedule(a)} · ${a.status} · 已运行 ${a.runCount} 次${a.nextRunAt ? ` · 下次 ${a.nextRunAt.slice(0, 16).replace("T", " ")}` : ""}`);
+        console.log(`${DIM}  (/automations run|del|on|off <id>)${RESET}`);
         break;
       }
       case "quit": case "exit": case "q":

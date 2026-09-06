@@ -102,6 +102,83 @@ class JsonStorage {
     this._flush();
   }
 
+  /* ---------------- automations ---------------- */
+
+  constructorInitAutomations() {
+    if (!Array.isArray(this.data.automations)) this.data.automations = [];
+    if (!Array.isArray(this.data.automation_runs)) this.data.automation_runs = [];
+  }
+
+  automationCreate(a) {
+    this.constructorInitAutomations.call(this);
+    const row = { ...a, enabled: a.enabled !== false, recurring: !!a.recurring, runCount: a.runCount || 0, createdAt: a.createdAt || now(), updatedAt: now() };
+    this.data.automations.push(row);
+    this._flush();
+    return JSON.parse(JSON.stringify(row));
+  }
+
+  automationGet(id) { this.constructorInitAutomations.call(this); return this.data.automations.find((x) => x.id === id) || null; }
+
+  automationList({ workspace } = {}) {
+    this.constructorInitAutomations.call(this);
+    return JSON.parse(JSON.stringify(
+      this.data.automations.filter((a) => !workspace || !a.workspace || a.workspace === workspace)
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    ));
+  }
+
+  automationUpdate(id, fields) {
+    const a = this.automationGet(id);
+    if (!a) return null;
+    Object.assign(a, fields, { updatedAt: now() });
+    this._flush();
+    return JSON.parse(JSON.stringify(a));
+  }
+
+  automationDelete(id) {
+    this.constructorInitAutomations.call(this);
+    this.data.automations = this.data.automations.filter((x) => x.id !== id);
+    this.data.automation_runs = this.data.automation_runs.filter((r) => r.automationId !== id);
+    this._flush();
+  }
+
+  automationClaim(id, expectedNextRunAt, newNextRunAt) {
+    const a = this.automationGet(id);
+    if (!a || a.nextRunAt !== expectedNextRunAt) return false;
+    a.nextRunAt = newNextRunAt;
+    a.updatedAt = now();
+    this._flush();
+    return true;
+  }
+
+  dueAutomations(nowIso) {
+    this.constructorInitAutomations.call(this);
+    return JSON.parse(JSON.stringify(
+      this.data.automations.filter((a) => a.enabled && a.status === "active" && a.nextRunAt && a.nextRunAt <= nowIso)
+        .sort((a, b) => (a.nextRunAt < b.nextRunAt ? -1 : 1))
+    ));
+  }
+
+  automationRunStart({ id, automationId, sessionId }) {
+    this.constructorInitAutomations.call(this);
+    this.data.automation_runs.push({ id, automationId, sessionId: sessionId || null, started_at: now(), finished_at: null, ok: null, error: null, created_at: now() });
+    this._flush();
+  }
+
+  automationRunFinish(runId, { sessionId, ok, error }) {
+    this.constructorInitAutomations.call(this);
+    const r = this.data.automation_runs.find((x) => x.id === runId);
+    if (r) { r.finished_at = now(); r.sessionId = sessionId || null; r.ok = !!ok; r.error = error || null; this._flush(); }
+  }
+
+  automationRuns(automationId, { limit = 20 } = {}) {
+    this.constructorInitAutomations.call(this);
+    return JSON.parse(JSON.stringify(
+      this.data.automation_runs.filter((r) => r.automationId === automationId)
+        .sort((a, b) => (a.started_at < b.started_at ? 1 : -1)).slice(0, limit)
+    ));
+  }
+
   close() { this._flush(); }
 }
 

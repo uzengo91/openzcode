@@ -23,6 +23,8 @@ const { SkillRegistry } = require("../skills");
 const pluginRegistry = require("../plugins");
 const commands = require("../commands");
 const { McpManager, writeUserMcp, readMcpFile, userMcpPath } = require("../mcp/manager");
+const automations = require("../automations");
+const marketplace = require("../marketplace");
 const { VERSION, PROTOCOL_VERSION } = require("../version");
 
 function resolveWorkspace(p) {
@@ -59,6 +61,69 @@ function runAppServer() {
     return mcp.load();
   }
   const extensionsReady = refreshExtensions().catch(() => {});
+
+  /* ------------- turn launcher (shared by RPC + scheduler) ------------- */
+
+  async function launchTurn(sessionId, text, { yolo = false } = {}) {
+    const session = storage.getSession(sessionId);
+    if (!session) throw new Error(`会话不存在: ${sessionId}`);
+    const trimmed = String(text ?? "").trim();
+    if (!trimmed) throw new Error("消息不能为空");
+
+    let cfg = configStore.load();
+    if (yolo) cfg = { ...cfg, permissionMode: "yolo" };
+    const provider = configStore.getDefaultProvider();
+
+    const t = turnState(sessionId);
+    if (t.running) throw new Error("该会话正在处理上一条消息，请等待或点击停止");
+
+    await extensionsReady;
+    t.running = true;
+    t.abort = new AbortController();
+    const abort = t.abort;
+
+    // runAgentTurn resolves (never rejects) with {ok,...}; progress flows as session/event
+    const done = runAgentTurn({
+      session,
+      userText: trimmed,
+      provider,
+      config: cfg,
+      storage,
+      emit: (event) => emitEvent(sessionId, event),
+      permissionHandler: ({ id, signal }) =>
+        new Promise((resolve, reject) => {
+          t.pendingPerms.set(id, { resolve, reject });
+          const onAbort = () => {
+            t.pendingPerms.delete(id);
+            reject(new Error("已停止"));
+          };
+          signal?.addEventListener("abort", onAbort, { once: true });
+        }),
+      signal: abort.signal,
+      extensions: { mcpManager: mcp, skills, automations: automationService },
+    });
+    done.finally(() => {
+      t.running = false;
+      t.abort = null;
+      t.pendingPerms.clear();
+    });
+    return done;
+  }
+
+  /* ------------- automations service + scheduler ------------- */
+
+  const automationService = automations.createService({
+    storage,
+    workspace: defaultWorkspace,
+    launchTurn,
+    emit: (e) => { if (!rpc.isClosed() && (e.type === "automation_started" || e.type === "automation_finished" || e.type === "automation_changed")) rpc.notify("automation/status", e); },
+  });
+
+  const SCHEDULER_TICK_MS = Math.max(1000, Number(process.env.OPENZCODE_AUTOMATION_TICK_MS) || 30000);
+  const schedulerTimer = setInterval(() => {
+    automationService.tickNow().catch((e) => console.error(`[automation] tick: ${e.message}`));
+  }, SCHEDULER_TICK_MS);
+  if (schedulerTimer.unref) schedulerTimer.unref();
 
   function turnState(sessionId) {
     let t = turns.get(sessionId);
@@ -153,53 +218,30 @@ function runAppServer() {
     return { deleted: true };
   }));
 
-  rpc.on("session/send", guard(async (p) => {
-    const session = storage.getSession(p.sessionId);
-    if (!session) throw new Error(`会话不存在: ${p.sessionId}`);
-    const text = String(p.text ?? "").trim();
-    if (!text) throw new Error("消息不能为空");
-
-    const t = turnState(p.sessionId);
-    if (t.running) throw new Error("该会话正在处理上一条消息，请等待或点击停止");
-
+  rpc.on("session/send", guard((p) => {
     const provider = p.providerIdOrName ? configStore.getProvider(p.providerIdOrName) : configStore.getDefaultProvider();
-    const config = configStore.load();
-
-    await extensionsReady; // make sure skills/mcp registries are loaded
-
-    t.running = true;
-    t.abort = new AbortController();
-    const abort = t.abort;
-
-    // Fire the turn asynchronously; progress flows out as session/event.
-    runAgentTurn({
-      session,
-      userText: text,
-      provider,
-      config,
-      storage,
-      emit: (event) => emitEvent(p.sessionId, event),
-      permissionHandler: ({ id, signal }) =>
-        new Promise((resolve, reject) => {
-          t.pendingPerms.set(id, { resolve, reject });
-          const onAbort = () => {
-            t.pendingPerms.delete(id);
-            reject(new Error("已停止"));
-          };
-          signal?.addEventListener("abort", onAbort, { once: true });
-        }),
-      signal: abort.signal,
-      extensions: { mcpManager: mcp, skills },
-    })
-      .catch(() => {})
-      .finally(() => {
-        t.running = false;
-        t.abort = null;
-        t.pendingPerms.clear();
-      });
-
+    // fire-and-forget: the turn streams out as session/event; automation fire() awaits its own copy
+    launchTurn(p.sessionId, p.text, { yolo: !!p.yolo }).catch((e) => console.error(`[session/send] ${e?.stack || e}`));
     return { started: true, provider: provider ? { id: provider.id, name: provider.name, model: provider.model } : null };
   }));
+
+  /* ------------- automations RPC ------------- */
+
+  rpc.on("automation/create", guard((p) => automationService.create(p)));
+  rpc.on("automation/list", guard((p) => automationService.list(p)));
+  rpc.on("automation/get", guard((p) => {
+    const a = automationService.get(p.id);
+    if (!a) throw new Error(`自动化不存在: ${p.id}`);
+    return a;
+  }));
+  rpc.on("automation/update", guard((p) => {
+    const { id, ...fields } = p;
+    return automationService.update(id, fields);
+  }));
+  rpc.on("automation/delete", guard((p) => automationService.remove(p.id)));
+  rpc.on("automation/toggle", guard((p) => automationService.toggle(p.id)));
+  rpc.on("automation/runs", guard((p) => automationService.runs(p.id)));
+  rpc.on("automation/runNow", guard((p) => automationService.runNow(p.id)));
 
   rpc.on("session/stop", guard((p) => {
     const t = turns.get(p.sessionId);
@@ -268,6 +310,26 @@ function runAppServer() {
     await refreshExtensions();
     return { removed: r, list: mcp.list() };
   }));
+
+  /* ------------- marketplace RPC ------------- */
+
+  rpc.on("marketplace/list", guard(() => marketplace.listMarketplaces()));
+
+  rpc.on("marketplace/install", guard(async (p) => {
+    const all = await marketplace.listMarketplaces();
+    let entry = null;
+    for (const m of all) {
+      entry = m.plugins.find((x) => x.name === p.name && (!p.marketplace || m.name === p.marketplace));
+      if (entry) break;
+    }
+    if (!entry) throw new Error(`市场中未找到插件: ${p.name}`);
+    const installed = await marketplace.installEntry(entry);
+    await refreshExtensions();
+    return { installed, plugins: currentPlugins.map((x) => ({ name: x.name, version: x.version, scope: x.scope })) };
+  }));
+
+  rpc.on("marketplace/addSource", guard((p) => { marketplace.addSource({ name: p.name, url: p.url, path: p.path }); return marketplace.sources(); }));
+  rpc.on("marketplace/removeSource", guard((p) => marketplace.removeSource(p.name)));
 
   /* ------------- shutdown ------------- */
 
