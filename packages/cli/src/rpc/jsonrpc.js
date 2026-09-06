@@ -56,7 +56,7 @@ function createRpc({ input, output, onEnd, onError }) {
       Promise.resolve()
         .then(() => handler(msg.params ?? {}))
         .then(
-          (result) => write({ jsonrpc: "2.0", id: msg.id, result: result ?? {} }),
+          (result) => write({ jsonrpc: "2.0", id: msg.id, result: result !== undefined ? result : {} }),
           (err) => write({
             jsonrpc: "2.0", id: msg.id,
             error: { code: err.code && typeof err.code === "number" ? err.code : -32000, message: err.message || String(err) },

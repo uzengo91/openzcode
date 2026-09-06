@@ -133,6 +133,37 @@
         </section>
 
         <section class="settings-section">
+          <h3>MCP 服务器 <button id="mcp-reload" class="icon-btn" title="重载全部配置">↻ 重载</button></h3>
+          <div id="mcp-list" class="provider-list"></div>
+          <details class="mcp-add">
+            <summary>添加 MCP 服务器（保存到用户级 mcp.json）</summary>
+            <div class="form-grid">
+              <label>名称<input id="mcp-name" placeholder="my-server" /></label>
+              <label>类型
+                <select id="mcp-type">
+                  <option value="stdio">stdio（子进程）</option>
+                  <option value="http">Streamable HTTP</option>
+                </select>
+              </label>
+              <label class="span2">启动命令（stdio，空格分隔）<input id="mcp-command" placeholder="node /path/to/server.js --flag" /></label>
+              <label class="span2">URL（http）<input id="mcp-url" placeholder="https://host/mcp" /></label>
+              <label class="span2">Headers JSON（http 可选）<input id="mcp-headers" placeholder='{"authorization":"Bearer xxx"}' /></label>
+            </div>
+            <div class="form-actions">
+              <button id="mcp-save" class="btn primary">保存并连接</button>
+              <span id="mcp-save-msg" class="test-result"></span>
+            </div>
+          </details>
+          <p class="about">项目级配置: 工作目录下 .mcp.json（格式 {"mcpServers":{...}}）；工具以 mcp__服务名__工具名 暴露给模型。</p>
+        </section>
+
+        <section class="settings-section">
+          <h3>技能 Skills</h3>
+          <div id="skills-list" class="provider-list"></div>
+          <p class="about">位置: ~/.openzcode/skills/&lt;名称&gt;/SKILL.md、项目 .openzcode/skills/、插件 skills/。技能按 description 自动触发。</p>
+        </section>
+
+        <section class="settings-section">
           <h3>关于</h3>
           <p class="about" id="about-line">OpenZCode MVP — CLI + Electron App · app-server over stdio JSON-RPC</p>
         </section>

@@ -18,4 +18,10 @@ contextBridge.exposeInMainWorld("openzcode", {
     ipcRenderer.on("engine/status", listener);
     return () => ipcRenderer.removeListener("engine/status", listener);
   },
+  // MCP server state changes from the engine
+  onMcpStatus: (cb) => {
+    const listener = (_ev, payload) => cb(payload);
+    ipcRenderer.on("mcp/status", listener);
+    return () => ipcRenderer.removeListener("mcp/status", listener);
+  },
 });

@@ -57,15 +57,50 @@ cd app && npm install && npx electron .   # 桌面 App
                             └── 存储: SQLite(node:sqlite, WAL) + rollout/*.jsonl
 ```
 
-## 功能清单（MVP）
+## 功能清单（MVP+）
 
 - **Agent 循环**：系统提示注入（含 AGENTS.md/CLAUDE.md 自动加载）→ 流式请求 → 工具调用 → 结果回填 → 多轮迭代（上限可配）
-- **内置工具 9 个**：`bash`、`read_file`、`write_file`、`edit_file`(str_replace 语义)、`list_dir`、`glob`、`grep`(优先 ripgrep)、`todo_write`、`web_fetch`
+- **内置工具 10 个**：`bash`、`read_file`、`write_file`、`edit_file`(str_replace 语义)、`list_dir`、`glob`、`grep`(优先 ripgrep)、`todo_write`、`web_fetch`、`skill`
 - **权限模型**：ask 模式下危险操作（bash/写/编辑）产生 `permission_request` 事件 → GUI 审批卡（允许/本会话总是允许/拒绝）或 TUI y/n/a；`yolo` 全放行；非交互且无 `--yolo` 时拒绝危险操作
 - **存储双写**：`~/.openzcode/db.sqlite`（session/message/todo/model_usage/tool_usage/permission，WAL）+ `rollout/<sessId>.jsonl`；`node:sqlite` 不可用时自动回退 JSON 存储
 - **模型接入**：Provider 注册表（openai/anthropic 双协议、多 provider、默认切换、连接测试、密钥 0600 落盘 + 脱敏回显）
-- **桌面 App**：会话侧栏（持久化恢复）、流式渲染、工具卡片、权限审批、token 用量、任务清单、设置面板、工作目录切换（引擎随迁重启）、引擎崩溃自动重启
-- **CLI TUI**：流式输出、工具行、权限确认、slash 命令（/new /sessions /resume /provider /yolo /todos /test /quit）
+- **桌面 App**：会话侧栏（持久化恢复）、流式渲染、工具卡片、权限审批、token 用量、任务清单、设置面板（Provider/MCP/Skills）、工作目录切换（引擎随迁重启）、引擎崩溃自动重启
+- **CLI TUI**：流式输出、工具行、权限确认、slash 命令（/new /sessions /resume /provider /skills /mcp /plugins /commands /reload /quit）
+
+## MCP 服务器（stdio + Streamable HTTP）
+
+工具以 `mcp__<server>__<tool>` 命名空间暴露给模型，自动出现在工具表中；崩溃自动重启后重试一次。
+
+配置三处作用域（同名时 project > user > plugin）：
+
+```jsonc
+// ~/.openzcode/mcp.json (用户级) 或 <工作区>/.mcp.json (项目级)
+{
+  "mcpServers": {
+    "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] },
+    "deepwiki":   { "url": "https://mcp.deepwiki.com/mcp", "headers": { "authorization": "Bearer xxx" } },
+    "careful":    { "command": "./run.sh", "danger": true }   // danger: true → ask 模式下需审批
+  }
+}
+```
+
+- GUI：⚙ 设置 → MCP 服务器 → 添加/禁用/重载；CLI：`openzcode mcp list|tools|call <server> <tool> [json]`
+- 传输：stdio（子进程，JSON-RPC over newline）与 Streamable HTTP（POST + `Mcp-Session-Id`，SSE/JSON 响应均可）
+
+## 技能 Skills
+
+`SKILL.md`（YAML frontmatter: `name` + `description`）放在三处任一：`~/.openzcode/skills/<名称>/`、`<工作区>/.openzcode/skills/<名称>/`、插件 `skills/`。名称与描述注入系统提示，模型判断匹配后调用 `skill` 工具加载完整说明再执行。示例见 [`examples/skills/repo-conventions`](examples/skills/repo-conventions/SKILL.md)。
+
+## 插件与自定义命令
+
+一个插件 = `~/.openzcode/plugins/<名称>/`（或项目 `.openzcode/plugins/`）下的目录，可同时贡献 `skills/` + `commands/` + `mcp.json`。完整示例见 [`examples/plugins/demo-plugin`](examples/plugins/demo-plugin)。
+
+```bash
+openzcode plugin install ./my-plugin    # 安装(复制到用户级)
+openzcode plugin list | remove <name>
+```
+
+自定义 slash 命令：`~/.openzcode/commands/<名称>.md`（或项目/插件 `commands/`），frontmatter `description`，正文为提示词模板，`$ARGUMENTS`/`$1` 会被实际参数替换。示例见 [`examples/commands/translate.md`](examples/commands/translate.md)。TUI 与 GUI 输入 `/名称 参数` 即生效。
 
 ## 数据布局（`~/.openzcode/`）
 
@@ -86,12 +121,15 @@ npm run package          # 打 release zip
 ```
 
 - `test:e2e` 与 `test:artifact` 需要真实模型服务：设置 `OPENZCODE_TEST_API_KEY`（可选 `OPENZCODE_TEST_BASE_URL`、`OPENZCODE_TEST_MODEL`），或已在 `~/.openzcode/config.json` 配置默认 provider。密钥不进仓库。
-- `test:artifact` 是最终验收门：用**构建产物**（`OPENZCODE_BUNDLE` 可指向 release 解压出的 openzcode.cjs）驱动 agent，把**本仓库**作为工作区 —— 模型要读取真实源码（`packages/cli/src/version.js`、`README.md`、`packages/app/package.json`）并将提取的事实写入 `.oz-itest/`（gitignored），断言逐字节与仓库真值一致。
+- `test:artifact` 是最终验收门：用**构建产物**（`OPENZCODE_BUNDLE` 可指向 release 解压出的 openzcode.cjs）驱动 agent，把**本仓库**作为工作区 —— 模型要读取真实源码并写入 `.oz-itest/`（gitignored），断言逐字节与仓库真值一致；同时验证 **MCP 工具调用**（引擎加载配置的 MCP server，LLM 决策调用 `mcp__calc__add` 并核验结果）。
+- `test:ci` 覆盖 MCP 双 transport（stdio + Streamable HTTP 的握手/tools list/tools call）、技能发现与 frontmatter、命令展开（$ARGUMENTS/$1）、插件安装/移除/启停 —— 全程无 LLM、无外网。
 
 ## RPC 方法面（app-server）
 
 `initialize`、`server/info`、`config/get|setProvider|removeProvider|setDefaultProvider|setOptions|testProvider`、
-`session/create|list|get|messages|todos|send|stop|approve|delete`；事件通知 `session/event`（`turn_started` / `text_delta` / `message` / `tool_start` / `tool_end` / `permission_request` / `permission_resolved` / `todo_updated` / `usage` / `session_updated` / `turn_done`）。
+`session/create|list|get|messages|todos|send|stop|approve|delete`、
+`mcp/list|reload|toggle|call|userConfig|saveUserConfig`、`skills/list`、`commands/list|expand`、`plugin/list|install|remove`；
+事件通知 `session/event`（`turn_started` / `text_delta` / `message` / `tool_start` / `tool_end` / `permission_request` / `permission_resolved` / `todo_updated` / `skill_loaded` / `usage` / `session_updated` / `turn_done`）、`mcp/status`。
 
 ## CI / Release
 
@@ -100,9 +138,9 @@ npm run package          # 打 release zip
 
 ## 与完整版 ZCode 的差距（有意裁剪）
 
-MVP 聚焦"单二进制双形态 + app-server + agent loop + 权限 + 双写存储"这条主干。以下能力未包含，但预留了扩展点：
-MCP 客户端与插件市场、子代理（Agent 工具）、computer-use / browser-use broker（UDS+token）、
-调度器（cron automations）、遥测（OpenTelemetry）、本地 CA 中间代理、会话 compact/fork、checkpoints。
+主干之外，本仓库已实现 MCP 客户端、Skills、插件与自定义命令。仍未包含（扩展点预留）：
+子代理（Agent 工具）、computer-use / browser-use broker（UDS+token）、调度器（cron automations）、
+遥测（OpenTelemetry）、本地 CA 中间代理、会话 compact/fork、checkpoints、插件市场（远程安装）。
 
 ## License
 

@@ -252,3 +252,9 @@ body {
 ::-webkit-scrollbar-thumb { background: #2a323d; border-radius: 6px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-track { background: transparent; }
 .hidden { display: none !important; }
+
+/* MCP add form + skills section */
+.mcp-add { margin-top: 4px; }
+.mcp-add summary { cursor: pointer; font-size: 12px; color: var(--accent); margin-bottom: 8px; }
+.mcp-add .form-grid { margin-top: 8px; }
+.dot.starting { background: var(--yellow); }

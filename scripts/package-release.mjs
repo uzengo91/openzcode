@@ -31,6 +31,8 @@ const cp = (src, dest) => {
 
 cp(path.join(ROOT, "packages/cli/dist/openzcode.cjs"), path.join(stageDir, "openzcode.cjs"));
 for (const f of ["README.md", "README.en.md", "LICENSE"]) cp(path.join(ROOT, f), path.join(stageDir, f));
+// user-facing extension examples (skills / commands / plugin)
+fs.cpSync(path.join(ROOT, "examples"), path.join(stageDir, "examples"), { recursive: true });
 
 // Electron app source (renderer needs no build step)
 const appFiles = ["main.js", "preload.js", "package.json"];

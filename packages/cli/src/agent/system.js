@@ -6,7 +6,7 @@ const path = require("node:path");
 const os = require("node:os");
 const { VERSION, APP_NAME } = require("../version");
 
-function buildSystemPrompt({ workspace, toolNames }) {
+function buildSystemPrompt({ workspace, toolNames, skillsSection = "", hasMcp = false }) {
   const lines = [];
   lines.push(`You are ${APP_NAME}, an interactive coding agent (MVP, v${VERSION}).`);
   lines.push(`你在一个终端/桌面应用中帮助用户完成软件工程任务：阅读与修改代码、执行命令、维护任务清单。`);
@@ -29,6 +29,12 @@ function buildSystemPrompt({ workspace, toolNames }) {
     lines.push(`# 可用工具`);
     lines.push(toolNames.join(", "));
   }
+  if (hasMcp) {
+    lines.push("");
+    lines.push(`# MCP 工具`);
+    lines.push(`以 mcp__<server>__<tool> 命名的工具来自 MCP 服务器。调用时直接使用完整工具名, 参数遵循其 schema。`);
+  }
+  if (skillsSection) lines.push(skillsSection);
 
   // AGENTS.md / CLAUDE.md instruction files (workspace conventions)
   for (const name of ["AGENTS.md", "CLAUDE.md"]) {

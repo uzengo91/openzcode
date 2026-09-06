@@ -427,6 +427,24 @@ const TOOLS = [
     },
     run: runWebFetch,
   },
+  {
+    name: "skill",
+    description: "加载一个技能(Skill)的完整说明到上下文。当用户任务匹配系统提示中列出的技能描述时,先调用本工具,再按技能说明执行。可用 name 见系统提示的技能清单。",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "技能名(见系统提示技能清单)" },
+        args: { type: "string", description: "传给技能的附加参数(可选)" },
+      },
+      required: ["name"],
+    },
+    run: (input, ctx) => {
+      if (!ctx.skills) return Promise.resolve(errResult("技能系统不可用"));
+      const r = ctx.skills.loadForAgent(String(input.name || ""), input.args ? String(input.args) : null);
+      if (r.ok) ctx.emit && ctx.emit({ type: "skill_loaded", name: r.skill.name, scope: r.skill.dir });
+      return Promise.resolve(r);
+    },
+  },
 ];
 
 const TOOL_MAP = new Map(TOOLS.map((t) => [t.name, t]));

@@ -9,9 +9,13 @@
 
 const configStore = require("./config");
 const { testProvider } = require("./llm/client");
-const { ensureDirs } = require("./paths");
+const { ensureDirs, dirs } = require("./paths");
 const { runTui, runPrint } = require("./tui");
 const { runAppServer } = require("./appserver/server");
+const { SkillRegistry } = require("./skills");
+const pluginRegistry = require("./plugins");
+const commands = require("./commands");
+const { McpManager } = require("./mcp/manager");
 const { VERSION, APP_NAME } = require("./version");
 
 function usage() {
@@ -135,6 +139,89 @@ function cmdConfig(args) {
   process.exit(sub ? 2 : 0);
 }
 
+/* ---------------- extension subcommands (mcp/skill/plugin/command) ---------------- */
+
+function makeExtensions() {
+  const workspace = dirs().workspace;
+  const plugins = pluginRegistry.discover({ workspace });
+  const skills = new SkillRegistry({ workspace, plugins });
+  const mcp = new McpManager({ workspace, plugins, emit: (e) => { if (e.type === "log") console.error(`[mcp] ${e.message}`); } });
+  return { workspace, plugins, skills, mcp };
+}
+
+async function cmdMcp(args) {
+  const sub = args[0] || "list";
+  const ext = makeExtensions();
+  try {
+    if (sub === "list") {
+      const list = await ext.mcp.load();
+      if (!list.length) { console.log("(无 MCP server — 在 ~/.openzcode/mcp.json 或项目 .mcp.json 配置)"); return; }
+      for (const s of list) {
+        console.log(`${s.enabled ? "→" : " "} ${s.name.padEnd(16)} [${s.type}] ${s.status.padEnd(8)} tools=${s.toolCount}  (${s.source}) ${s.error ? "⚠ " + s.error : ""}`);
+      }
+    } else if (sub === "tools") {
+      await ext.mcp.load();
+      const defs = await ext.mcp.toolDefinitions();
+      if (!defs.length) { console.log("(无可用 MCP 工具)"); return; }
+      for (const d of defs) console.log(`${d.name}  —  ${String(d.description).slice(0, 100)}`);
+    } else if (sub === "call") {
+      // openzcode mcp call <server> <tool> [json-args]
+      const [, server, tool, jsonArgs] = args;
+      if (!server || !tool) { console.error("用法: openzcode mcp call <server> <tool> '{\"a\":1}'"); process.exit(2); }
+      await ext.mcp.load();
+      const r = await ext.mcp.callDirect(server, tool, jsonArgs ? JSON.parse(jsonArgs) : {});
+      console.log(r.ok ? r.output : `✗ ${r.output}`);
+      if (!r.ok) process.exit(1);
+    } else {
+      console.error("用法: openzcode mcp list|tools|call <server> <tool> [args]");
+      process.exit(sub ? 2 : 0);
+    }
+  } catch (e) { console.error(`✗ ${e.message}`); process.exit(1); } finally { ext.mcp.close(); }
+}
+
+function cmdSkill(args) {
+  const ext = makeExtensions();
+  const sub = args[0] || "list";
+  if (sub === "list") {
+    const list = ext.skills.list();
+    if (!list.length) { console.log("(无技能 — 在 ~/.openzcode/skills/<name>/SKILL.md 或项目 .openzcode/skills/ 创建)"); return; }
+    for (const s of list) console.log(`→ ${s.name.padEnd(20)} [${s.scope}] ${s.description}`);
+  } else if (sub === "show") {
+    const s = ext.skills.get(args[1]);
+    if (!s) { console.error(`未找到技能: ${args[1]}`); process.exit(1); }
+    console.log(`# ${s.name}  (${s.scope})\n${s.description}\n\n---\n${s.body}`);
+  } else { console.error("用法: openzcode skill list|show <name>"); process.exit(sub ? 2 : 0); }
+}
+
+function cmdPlugin(args) {
+  const ext = makeExtensions();
+  const sub = args[0] || "list";
+  try {
+    if (sub === "list") {
+      if (!ext.plugins.length) { console.log("(无插件 — 目录: ~/.openzcode/plugins/<name>/ 或项目 .openzcode/plugins/<name>/)"); return; }
+      for (const p of ext.plugins) {
+        const c = [p.skillsDir && "skills", p.commandsDir && "commands", p.mcpPath && "mcp"].filter(Boolean).join("+") || "—";
+        console.log(`→ ${p.name.padEnd(18)} v${p.version} [${p.scope}] 贡献: ${c}  ${p.description}`);
+      }
+    } else if (sub === "install") {
+      const r = pluginRegistry.install(args[1], { workspace: ext.workspace });
+      console.log(`✓ 已安装插件 ${r.name} → ${r.dest}`);
+    } else if (sub === "remove") {
+      const r = pluginRegistry.remove(args[1], { workspace: ext.workspace });
+      console.log(`✓ 已移除 ${r.name} (${r.removed})`);
+    } else { console.error("用法: openzcode plugin list|install <path>|remove <name>"); process.exit(sub ? 2 : 0); }
+  } catch (e) { console.error(`✗ ${e.message}`); process.exit(1); }
+}
+
+function cmdCommand(args) {
+  const ext = makeExtensions();
+  if ((args[0] || "list") === "list") {
+    const list = commands.list({ workspace: ext.workspace, plugins: ext.plugins });
+    if (!list.length) { console.log("(无自定义命令 — 在 ~/.openzcode/commands/<name>.md 或插件 commands/ 创建)"); return; }
+    for (const c of list) console.log(`/${c.name.padEnd(16)} [${c.scope}] ${c.description}`);
+  } else { console.error("用法: openzcode command list"); process.exit(2); }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
 
@@ -151,6 +238,10 @@ async function main() {
 
   if (argv[0] === "provider") { await cmdProvider(argv.slice(1)); return; }
   if (argv[0] === "config") { cmdConfig(argv.slice(1)); return; }
+  if (argv[0] === "mcp") { await cmdMcp(argv.slice(1)); return; }
+  if (argv[0] === "skill" || argv[0] === "skills") { cmdSkill(argv.slice(1)); return; }
+  if (argv[0] === "plugin" || argv[0] === "plugins") { cmdPlugin(argv.slice(1)); return; }
+  if (argv[0] === "command" || argv[0] === "commands") { cmdCommand(argv.slice(1)); return; }
   if (argv[0] === "help" || argv[0] === "--help" || argv[0] === "-h") { usage(); return; }
 
   if (argv[0] === "-p" || argv[0] === "--print") {

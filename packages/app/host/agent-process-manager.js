@@ -86,8 +86,9 @@ class AgentProcessManager {
     });
 
     this.rpc = createRpc({ input: this.proc.stdout, output: this.proc.stdin });
-    // Forward CLI notifications (session/event …) to the UI layer.
+    // Forward CLI notifications (session/event, mcp/status …) to the UI layer.
     this.rpc.on("session/event", (params) => this.onEvent("session/event", params));
+    this.rpc.on("mcp/status", (params) => this.onEvent("mcp/status", params));
 
     await this.rpc.request("initialize", { workspace: this.workspace }, { timeoutMs: 15000 });
     this.ready = true;

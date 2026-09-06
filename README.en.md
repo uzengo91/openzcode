@@ -57,15 +57,50 @@ user ── GUI ── Electron main (openzcode-app)
                             └── storage: SQLite (node:sqlite, WAL) + rollout/*.jsonl
 ```
 
-## Features (MVP)
+## Features (MVP+)
 
 - **Agent loop**: system-prompt injection (auto-loads AGENTS.md/CLAUDE.md) → streaming request → tool calls → results fed back → multi-turn iteration (configurable cap)
-- **9 built-in tools**: `bash`, `read_file`, `write_file`, `edit_file` (str_replace semantics), `list_dir`, `glob`, `grep` (ripgrep preferred), `todo_write`, `web_fetch`
+- **10 built-in tools**: `bash`, `read_file`, `write_file`, `edit_file` (str_replace semantics), `list_dir`, `glob`, `grep` (ripgrep preferred), `todo_write`, `web_fetch`, `skill`
 - **Permission model**: in `ask` mode, dangerous ops (bash/write/edit) emit a `permission_request` event → GUI approval card (allow / always-for-this-session / deny) or TUI y/n/a; `yolo` allows everything; non-interactive runs without `--yolo` deny dangerous ops
 - **Storage double-write**: `~/.openzcode/db.sqlite` (session/message/todo/model_usage/tool_usage/permission, WAL) + `rollout/<sessId>.jsonl`; automatic JSON fallback where `node:sqlite` is unavailable
 - **Model access**: provider registry (openai/anthropic protocols, multiple providers, default switching, connection test, keys stored 0600 and masked in echo)
-- **Desktop App**: session sidebar (persisted & restored), streaming rendering, tool cards, approval cards, token usage, todo panel, settings panel, workspace switching (engine restarts along), engine crash auto-restart
-- **CLI TUI**: streaming output, tool lines, permission prompts, slash commands (/new /sessions /resume /provider /yolo /todos /test /quit)
+- **Desktop App**: session sidebar (persisted & restored), streaming rendering, tool cards, approval cards, token usage, todo panel, settings panel (providers/MCP/skills), workspace switching (engine restarts along), engine crash auto-restart
+- **CLI TUI**: streaming output, tool lines, permission prompts, slash commands (/new /sessions /resume /provider /skills /mcp /plugins /commands /reload /quit)
+
+## MCP Servers (stdio + Streamable HTTP)
+
+Tools are exposed to the model under the `mcp__<server>__<tool>` namespace and appear in the tool table automatically; crashed servers are restarted and the call retried once.
+
+Three config scopes (project > user > plugin on name conflict):
+
+```jsonc
+// ~/.openzcode/mcp.json (user) or <workspace>/.mcp.json (project)
+{
+  "mcpServers": {
+    "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] },
+    "deepwiki":   { "url": "https://mcp.deepwiki.com/mcp", "headers": { "authorization": "Bearer xxx" } },
+    "careful":    { "command": "./run.sh", "danger": true }   // danger: true → approval required in ask mode
+  }
+}
+```
+
+- GUI: ⚙ Settings → MCP Servers → add / disable / reload; CLI: `openzcode mcp list|tools|call <server> <tool> [json]`
+- Transports: stdio (subprocess, JSON-RPC over newline-delimited frames) and Streamable HTTP (POST + `Mcp-Session-Id`, SSE or JSON responses)
+
+## Skills
+
+A `SKILL.md` (YAML frontmatter: `name` + `description`) lives in any of: `~/.openzcode/skills/<name>/`, `<workspace>/.openzcode/skills/<name>/`, or a plugin's `skills/`. Names + descriptions are injected into the system prompt; when a task matches, the model calls the `skill` tool to load the full instructions. Example: [`examples/skills/repo-conventions`](examples/skills/repo-conventions/SKILL.md).
+
+## Plugins & Custom Commands
+
+A plugin = a directory under `~/.openzcode/plugins/<name>/` (or project `.openzcode/plugins/`) that can contribute `skills/` + `commands/` + `mcp.json` at once. Full example: [`examples/plugins/demo-plugin`](examples/plugins/demo-plugin).
+
+```bash
+openzcode plugin install ./my-plugin    # installs (copies to user scope)
+openzcode plugin list | remove <name>
+```
+
+Custom slash commands: `~/.openzcode/commands/<name>.md` (or project/plugin `commands/`), frontmatter `description`, body is a prompt template where `$ARGUMENTS`/`$1` are substituted with what you type. Example: [`examples/commands/translate.md`](examples/commands/translate.md). Works in both TUI and GUI via `/name args`.
 
 ## Data Layout (`~/.openzcode/`)
 
@@ -91,7 +126,9 @@ npm run package          # build the release zip
 ## RPC Surface (app-server)
 
 `initialize`, `server/info`, `config/get|setProvider|removeProvider|setDefaultProvider|setOptions|testProvider`,
-`session/create|list|get|messages|todos|send|stop|approve|delete`; event notification `session/event` (`turn_started` / `text_delta` / `message` / `tool_start` / `tool_end` / `permission_request` / `permission_resolved` / `todo_updated` / `usage` / `session_updated` / `turn_done`).
+`session/create|list|get|messages|todos|send|stop|approve|delete`,
+`mcp/list|reload|toggle|call|userConfig|saveUserConfig`, `skills/list`, `commands/list|expand`, `plugin/list|install|remove`;
+event notification `session/event` (`turn_started` / `text_delta` / `message` / `tool_start` / `tool_end` / `permission_request` / `permission_resolved` / `todo_updated` / `skill_loaded` / `usage` / `session_updated` / `turn_done`), `mcp/status`.
 
 ## CI / Release
 
@@ -100,7 +137,7 @@ npm run package          # build the release zip
 
 ## Gap vs. full ZCode (intentional cuts)
 
-The MVP focuses on the backbone: "single-binary dual-form + app-server + agent loop + permissions + double-write storage". Not included (extension points reserved): MCP clients & plugin marketplace, subagents, computer-use / browser-use brokers (UDS+token), scheduler (cron automations), telemetry (OpenTelemetry), local CA MITM proxy, session compact/fork, checkpoints.
+Beyond the backbone, this repo implements an MCP client, skills, plugins and custom commands. Still not included (extension points reserved): subagents, computer-use / browser-use brokers (UDS+token), scheduler (cron automations), telemetry (OpenTelemetry), local CA MITM proxy, session compact/fork, checkpoints, remote plugin marketplace.
 
 ## License
 

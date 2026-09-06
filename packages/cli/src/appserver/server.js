@@ -19,6 +19,10 @@ const { getStorage } = require("../storage");
 const { dirs, ensureDirs } = require("../paths");
 const { runAgentTurn } = require("../agent/loop");
 const { testProvider } = require("../llm/client");
+const { SkillRegistry } = require("../skills");
+const pluginRegistry = require("../plugins");
+const commands = require("../commands");
+const { McpManager, writeUserMcp, readMcpFile, userMcpPath } = require("../mcp/manager");
 const { VERSION, PROTOCOL_VERSION } = require("../version");
 
 function resolveWorkspace(p) {
@@ -36,6 +40,25 @@ function runAppServer() {
 
   // sessionId -> { abort: AbortController|null, running: bool, pendingPerms: Map }
   const turns = new Map();
+
+  /* ------------- extensions: plugins / skills / commands / mcp ------------- */
+
+  let currentPlugins = [];
+  const skills = new SkillRegistry({ workspace: defaultWorkspace, plugins: [] });
+  const mcp = new McpManager({ workspace: defaultWorkspace, plugins: [], emit: () => {} });
+
+  mcp.setEmit((e) => {
+    if (e.type === "mcp_status") { if (!rpc.isClosed()) rpc.notify("mcp/status", { name: e.name, status: e.status }); }
+    else if (e.type === "log") { if (!rpc.isClosed()) rpc.notify("engine/log", { message: e.message }); }
+  });
+
+  function refreshExtensions() {
+    currentPlugins = pluginRegistry.discover({ workspace: defaultWorkspace });
+    skills.setContext({ workspace: defaultWorkspace, plugins: currentPlugins });
+    mcp.setContext({ workspace: defaultWorkspace, plugins: currentPlugins });
+    return mcp.load();
+  }
+  const extensionsReady = refreshExtensions().catch(() => {});
 
   function turnState(sessionId) {
     let t = turns.get(sessionId);
@@ -142,6 +165,8 @@ function runAppServer() {
     const provider = p.providerIdOrName ? configStore.getProvider(p.providerIdOrName) : configStore.getDefaultProvider();
     const config = configStore.load();
 
+    await extensionsReady; // make sure skills/mcp registries are loaded
+
     t.running = true;
     t.abort = new AbortController();
     const abort = t.abort;
@@ -164,6 +189,7 @@ function runAppServer() {
           signal?.addEventListener("abort", onAbort, { once: true });
         }),
       signal: abort.signal,
+      extensions: { mcpManager: mcp, skills },
     })
       .catch(() => {})
       .finally(() => {
@@ -190,10 +216,64 @@ function runAppServer() {
     return { resolved: true };
   }));
 
+  /* ------------- extensions RPC: mcp / skills / commands / plugins ------------- */
+
+  rpc.on("mcp/list", guard(() => mcp.list()));
+
+  rpc.on("mcp/reload", guard(async () => { await refreshExtensions(); return mcp.list(); }));
+
+  rpc.on("mcp/toggle", guard(async (p) => {
+    const cfg = configStore.load();
+    const disabled = new Set(cfg.disabledMcpServers || []);
+    if (disabled.has(p.name)) disabled.delete(p.name);
+    else disabled.add(p.name);
+    cfg.disabledMcpServers = [...disabled];
+    configStore.save(cfg);
+    await refreshExtensions();
+    return mcp.list();
+  }));
+
+  rpc.on("mcp/saveUserConfig", guard(async (p) => {
+    const servers = p.servers && typeof p.servers === "object" ? p.servers : {};
+    writeUserMcp(servers);
+    await refreshExtensions();
+    return { saved: userMcpPath(), list: mcp.list() };
+  }));
+
+  rpc.on("mcp/userConfig", guard(() => ({ path: userMcpPath(), servers: readMcpFile(userMcpPath()) })));
+
+  rpc.on("mcp/call", guard((p) => mcp.callDirect(String(p.server), String(p.tool), p.args || {})));
+
+  rpc.on("skills/list", guard(() => skills.list()));
+
+  rpc.on("commands/list", guard(() => commands.list({ workspace: defaultWorkspace, plugins: currentPlugins })));
+
+  rpc.on("commands/expand", guard((p) => commands.expand(String(p.text || ""), { workspace: defaultWorkspace, plugins: currentPlugins })));
+
+  rpc.on("plugin/list", guard(() => currentPlugins.map((p) => ({
+    name: p.name, version: p.version, description: p.description, scope: p.scope, dir: p.dir,
+    contributes: {
+      skills: !!p.skillsDir, commands: !!p.commandsDir, mcp: !!p.mcpPath,
+    },
+  }))));
+
+  rpc.on("plugin/install", guard(async (p) => {
+    const r = pluginRegistry.install(String(p.path), { workspace: defaultWorkspace });
+    await refreshExtensions();
+    return { installed: r, list: mcp.list(), skills: skills.list() };
+  }));
+
+  rpc.on("plugin/remove", guard(async (p) => {
+    const r = pluginRegistry.remove(String(p.name), { workspace: defaultWorkspace });
+    await refreshExtensions();
+    return { removed: r, list: mcp.list() };
+  }));
+
   /* ------------- shutdown ------------- */
 
   function shutdown() {
     for (const [, t] of turns) { try { t.abort?.abort(new Error("app-server 关闭")); } catch {} }
+    try { mcp.close(); } catch {}
     try { storage.close(); } catch {}
     try { process.exit(0); } catch {}
   }

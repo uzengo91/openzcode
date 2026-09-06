@@ -9,8 +9,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const BUNDLE = process.env.OPENZCODE_BUNDLE || path.join(ROOT, "packages/cli/dist/openzcode.cjs");
+const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const BUNDLE = process.env.OPENZCODE_BUNDLE || path.join(REPO, "packages/cli/dist/openzcode.cjs");
 
 if (!fs.existsSync(BUNDLE)) {
   console.error(`✗ bundle 不存在: ${BUNDLE} (先运行 npm run build:cli)`);
@@ -20,6 +20,66 @@ if (!fs.existsSync(BUNDLE)) {
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openzcode-ci-"));
 const ws = path.join(tmp, "ws");
 fs.mkdirSync(ws, { recursive: true });
+
+// --- extension fixtures prepared in the temp environment ---
+const STDIO_SERVER = path.join(REPO, "scripts/fixtures/test-mcp-server.cjs");
+
+// user-scope mcp.json: one stdio + one http server (must live in OPENZCODE_CONFIG_DIR)
+const configDir = path.join(tmp, "data");
+fs.mkdirSync(configDir, { recursive: true });
+const httpPort = 8931 + Math.floor(Math.random() * 200);
+const userMcp = {
+  mcpServers: {
+    "test-stdio": { command: process.execPath, args: [STDIO_SERVER] },
+    "test-http": { url: `http://127.0.0.1:${httpPort}/mcp` },
+  },
+};
+fs.writeFileSync(path.join(configDir, "mcp.json"), JSON.stringify(userMcp));
+const userSkillsDir = path.join(configDir, "skills");
+fs.mkdirSync(path.join(userSkillsDir, "code-review"), { recursive: true });
+fs.writeFileSync(path.join(userSkillsDir, "code-review", "SKILL.md"), `---
+name: code-review
+description: 对代码做四眼原则审查 — 当用户要求 review 代码时使用
+---
+
+# 代码审查技能
+
+按以下清单审查代码: 1) 正确性 2) 边界条件 3) 命名 4) 测试覆盖。输出分节报告。
+`);
+fs.mkdirSync(path.join(userSkillsDir, "second-skill"), { recursive: true });
+fs.writeFileSync(path.join(userSkillsDir, "second-skill", "SKILL.md"), `---
+name: second-skill
+description: 用于测试技能数量统计的占位技能
+---
+内容。
+`);
+// project-scope skill + command
+fs.mkdirSync(path.join(ws, ".openzcode", "skills", "deploy-check"), { recursive: true });
+fs.writeFileSync(path.join(ws, ".openzcode", "skills", "deploy-check", "SKILL.md"), `---
+name: deploy-check
+description: 项目级部署前检查技能
+---
+检查清单。
+`);
+fs.mkdirSync(path.join(configDir, "commands"), { recursive: true });
+fs.writeFileSync(path.join(configDir, "commands", "review.md"), `---
+description: 用审查技能审查指定文件
+---
+
+请使用 code-review 技能审查以下文件: $ARGUMENTS
+`);
+fs.writeFileSync(path.join(configDir, "commands", "greet.md"), `---\ndescription: 打招呼\n---\n向 $1 打个招呼。\n`);
+// demo plugin (has skill + command + mcp)
+fs.mkdirSync(path.join(tmp, "plugin-src"), { recursive: true });
+fs.cpSync(path.join(REPO, "examples/plugins/demo-plugin"), path.join(tmp, "plugin-src", "demo-plugin"), { recursive: true });
+
+// start the HTTP MCP fixture
+const httpSrv = spawn(process.execPath, [path.join(REPO, "scripts/fixtures/test-http-mcp-server.mjs"), String(httpPort)], { stdio: ["ignore", "pipe", "pipe"] });
+await new Promise((resolve, reject) => {
+  const t = setTimeout(() => reject(new Error("http fixture 未启动")), 8000);
+  httpSrv.stdout.on("data", (d) => { if (String(d).includes("listening")) { clearTimeout(t); resolve(); } });
+  httpSrv.on("exit", () => { clearTimeout(t); reject(new Error("http fixture 提前退出")); });
+});
 
 let passed = 0, failed = 0;
 const check = (name, cond, detail = "") => {
@@ -114,6 +174,71 @@ try {
   const list2 = await request("session/list", { workspace: ws });
   check("session/delete", !list2.some((s) => s.id === session.id));
 
+  /* ============ extensions: MCP / Skills / Commands / Plugins ============ */
+
+  // MCP servers discovered from user mcp.json (stdio + http)
+  const waitRunning = async (name) => {
+    for (let i = 0; i < 40; i++) {
+      const l = await request("mcp/list", {});
+      const s = l.find((x) => x.name === name);
+      if (s && s.status === "running") return s;
+      if (s && s.status === "error") return s;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    return null;
+  };
+  const stdioSrv = await waitRunning("test-stdio");
+  check("MCP stdio server 启动并握手", !!stdioSrv && stdioSrv.status === "running", JSON.stringify(stdioSrv));
+  check("MCP stdio tools/list 同步 (3 工具)", stdioSrv?.tools?.length === 3, JSON.stringify(stdioSrv?.tools));
+  const httpSrvEntry = await waitRunning("test-http");
+  check("MCP Streamable HTTP server 启动并握手", !!httpSrvEntry && httpSrvEntry.status === "running", JSON.stringify(httpSrvEntry));
+
+  // direct tool calls through the manager
+  const callAdd = await request("mcp/call", { server: "test-stdio", tool: "add", args: { a: 123, b: 456 } }, 30000);
+  check("MCP stdio tools/call add(123,456)=579", callAdd.ok === true && String(callAdd.output).trim() === "579", JSON.stringify(callAdd));
+  const callUpper = await request("mcp/call", { server: "test-http", tool: "upper", args: { text: "hello mcp" } }, 30000);
+  check("MCP HTTP tools/call upper → HELLO MCP", callUpper.ok === true && String(callUpper.output).trim() === "HELLO MCP", JSON.stringify(callUpper));
+
+  // skills across scopes
+  const skills = await request("skills/list", {});
+  const names = skills.map((s) => s.name);
+  check("技能发现: 用户级 code-review", names.includes("code-review"));
+  check("技能发现: 项目级 deploy-check (project > user)", names.includes("deploy-check"));
+  check("技能 description 解析", skills.find((s) => s.name === "code-review")?.description?.includes("审查"));
+
+  // slash commands + expansion
+  const cmds = await request("commands/list", {});
+  check("命令发现 (review/greet)", cmds.some((c) => c.name === "review") && cmds.some((c) => c.name === "greet"));
+  const expanded = await request("commands/expand", { text: "/review src/foo.ts" });
+  check("命令展开 $ARGUMENTS", expanded && expanded.prompt.includes("code-review") && expanded.prompt.includes("src/foo.ts"), JSON.stringify(expanded));
+  const expanded1 = await request("commands/expand", { text: "/greet 小明" });
+  check("命令展开 $1", expanded1 && expanded1.prompt.includes("小明"), JSON.stringify(expanded1));
+  const notCmd = await request("commands/expand", { text: "/nope-nothing" });
+  check("未知 /命令 返回 null", notCmd === null || notCmd === undefined);
+
+  // plugin install → contributes skill + command + mcp server
+  await request("plugin/install", { path: path.join(tmp, "plugin-src", "demo-plugin") }, 30000);
+  const plist = await request("plugin/list", {});
+  const demo = plist.find((p) => p.name === "demo-plugin");
+  check("插件安装 + 发现", !!demo && demo.contributes.skills && demo.contributes.commands && demo.contributes.mcp, JSON.stringify(plist));
+  const plistSkills = await request("skills/list", {});
+  check("插件贡献的技能可见", plistSkills.some((s) => s.name === "demo-greeting"));
+  const plistCmds = await request("commands/list", {});
+  check("插件贡献的命令可见", plistCmds.some((c) => c.name === "explain"));
+  const plistMcp = await request("mcp/list", {});
+  check("插件贡献的 MCP server 可见 (demo-http)", plistMcp.some((s) => s.name === "demo-http"), JSON.stringify(plistMcp.map((s) => s.name)));
+
+  // mcp toggle enable/disable
+  const toggled = await request("mcp/toggle", { name: "test-http" });
+  check("mcp/toggle 禁用后 status=disabled", toggled.find((s) => s.name === "test-http")?.status === "disabled");
+  const toggledBack = await request("mcp/toggle", { name: "test-http" });
+  check("mcp/toggle 重新启用", toggledBack.find((s) => s.name === "test-http")?.enabled === true);
+
+  // plugin remove
+  await request("plugin/remove", { name: "demo-plugin" }, 30000);
+  const plist2 = await request("plugin/list", {});
+  check("插件移除", !plist2.some((p) => p.name === "demo-plugin"));
+
   console.log(`\n== CI 结果: ${passed} 通过, ${failed} 失败 ==`);
   process.exitCode = failed ? 1 : 0;
 } catch (e) {
@@ -121,6 +246,7 @@ try {
   process.exitCode = 1;
 } finally {
   child.kill("SIGTERM");
+  httpSrv && httpSrv.kill("SIGTERM");
   await new Promise((r) => setTimeout(r, 300));
   child.kill("SIGKILL");
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}

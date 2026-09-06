@@ -27,6 +27,27 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openzcode-e2e-"));
 const ws = path.join(tmp, "ws");
 fs.mkdirSync(ws, { recursive: true });
 
+// --- extension fixtures: an MCP stdio server + one skill (LLM will be asked to use both) ---
+const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const configDir = path.join(tmp, "data");
+fs.mkdirSync(configDir, { recursive: true });
+fs.writeFileSync(path.join(configDir, "mcp.json"), JSON.stringify({
+  mcpServers: { calc: { command: process.execPath, args: [path.join(REPO, "scripts/fixtures/test-mcp-server.cjs")] } },
+}));
+fs.mkdirSync(path.join(configDir, "skills", "release-checklist"), { recursive: true });
+fs.writeFileSync(path.join(configDir, "skills", "release-checklist", "SKILL.md"), `---
+name: release-checklist
+description: 发布前检查清单技能 — 当用户要求发布、打 tag 或出包时使用
+---
+
+# 发布检查清单技能
+
+执行发布前,按顺序完成并在最后逐条报告:
+1. 用 bash 确认工作区没有未提交的关键文件缺失
+2. 创建文件 release-report.txt, 内容为一行: RELEASE CHECKLIST DONE BY SKILL
+3. 用 read_file 读回 release-report.txt 确认
+`);
+
 let passed = 0, failed = 0;
 function check(name, cond, detail = "") {
   if (cond) { passed++; console.log(`  ✓ ${name}`); }
@@ -139,6 +160,27 @@ try {
     .flatMap((e) => e.event.message.parts).filter((p) => p.type === "text").map((p) => p.text).join(" ");
   check("第二轮正常完成(上下文延续)", turn2.ok === true, turn2.error || "");
   check("第二轮回答包含正确内容", textParts.includes("OpenZCode E2E OK"), textParts.slice(0, 150));
+
+  // 9. MCP 工具真实调用: agent 通过 LLM 决策调用 mcp__calc__add
+  eventLog.length = 0;
+  request("session/send", { sessionId: session.id, text: "请使用 MCP 工具 mcp__calc__add 计算 1234+4321 的结果,只回答数字本身。" }).catch(() => {});
+  const turn3 = await waitForTurnDone(180000);
+  const mcpToolUsed = eventLog.some((e) => e.event?.type === "tool_start" && e.event.name === "mcp__calc__add");
+  const mcpToolOk = eventLog.some((e) => e.event?.type === "tool_end" && e.event.name === "mcp__calc__add" && e.event.ok);
+  const text3 = eventLog.filter((e) => e.event?.type === "message" && e.event.message.role === "assistant")
+    .flatMap((e) => e.event.message.parts).filter((p) => p.type === "text").map((p) => p.text).join(" ");
+  check("MCP: LLM 决策调用了 mcp__calc__add", mcpToolUsed);
+  check("MCP: 工具调用成功", mcpToolOk);
+  check("MCP: 回答包含正确结果 5555", turn3.ok && text3.includes("5555"), text3.slice(0, 150));
+
+  // 10. Skill 工具真实触发: LLM 根据系统提示中的技能清单加载并执行
+  eventLog.length = 0;
+  request("session/send", { sessionId: session.id, text: "我要发布这个项目的版本,请按发布检查清单处理。" }).catch(() => {});
+  const turn4 = await waitForTurnDone(180000);
+  const skillUsed = eventLog.some((e) => e.event?.type === "skill_loaded" || (e.event?.type === "tool_start" && e.event.name === "skill"));
+  const releaseReport = path.join(ws, "release-report.txt");
+  check("Skill: LLM 触发了 skill 工具加载清单", skillUsed);
+  check("Skill: 技能指引的产物已生成", fs.existsSync(releaseReport) && fs.readFileSync(releaseReport, "utf8").includes("RELEASE CHECKLIST DONE BY SKILL"));
 
   console.log(`\n== 结果: ${passed} 通过, ${failed} 失败 ==`);
   console.log(`   事件总数 ${eventLog.length + " (含首轮)"} | 工具调用: ${[...new Set(toolStarts)].join(", ")}`);

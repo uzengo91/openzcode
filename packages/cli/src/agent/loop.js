@@ -23,6 +23,7 @@ async function runAgentTurn({
   emit,
   permissionHandler,
   signal,
+  extensions = {}, // { mcpManager, skills }
 }) {
   const sessionId = session.id;
   const workspace = session.workspace;
@@ -39,9 +40,16 @@ async function runAgentTurn({
     emit({ type: "session_updated", title });
   }
 
-  // 2. system prompt + history
-  const tools = toolDefinitions();
-  const system = buildSystemPrompt({ workspace, toolNames: tools.map((t) => t.name) });
+  // 2. tools = builtin (+ skill) + MCP namespaced tools; system prompt reflects both
+  const builtinDefs = toolDefinitions();
+  const mcpDefs = extensions.mcpManager ? await extensions.mcpManager.toolDefinitions() : [];
+  const tools = [...builtinDefs, ...mcpDefs];
+  const system = buildSystemPrompt({
+    workspace,
+    toolNames: tools.map((t) => t.name),
+    skillsSection: extensions.skills ? extensions.skills.promptSection() : "",
+    hasMcp: mcpDefs.length > 0,
+  });
   const history = storage.getMessages(sessionId).map((m) => ({ role: m.role, parts: m.parts }));
 
   const alwaysAllowed = new Set();
@@ -117,8 +125,19 @@ async function runAgentTurn({
       history.push({ role: "assistant", parts });
 
       // 5. execute tool calls sequentially
+      const mcpDefs = extensions.mcpManager ? await extensions.mcpManager.toolDefinitions() : [];
       for (const tc of response.toolCalls) {
-        const tool = getTool(tc.name);
+        let tool = getTool(tc.name);
+        if (!tool && tc.name.startsWith("mcp__")) {
+          const def = mcpDefs.find((d) => d.name === tc.name);
+          if (def && extensions.mcpManager) {
+            tool = {
+              name: tc.name,
+              danger: !!def.danger,
+              run: (input) => extensions.mcpManager.call(tc.name, input),
+            };
+          }
+        }
         let result;
         let denied = false;
 
@@ -153,6 +172,7 @@ async function runAgentTurn({
             try {
               result = await tool.run(tc.input ?? {}, {
                 workspace, sessionId, storage, config, emit, signal,
+                skills: extensions.skills,
               });
             } catch (err) {
               result = { ok: false, output: `工具执行异常: ${err.message}` };

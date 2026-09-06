@@ -9,6 +9,10 @@ const { getStorage } = require("../storage");
 const { dirs } = require("../paths");
 const { runAgentTurn } = require("../agent/loop");
 const { testProvider } = require("../llm/client");
+const { SkillRegistry } = require("../skills");
+const pluginRegistry = require("../plugins");
+const commands = require("../commands");
+const { McpManager } = require("../mcp/manager");
 const { VERSION, APP_NAME } = require("../version");
 
 const DIM = "\x1b[2m", RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", CYAN = "\x1b[36m", YELLOW = "\x1b[33m";
@@ -25,6 +29,20 @@ async function runTui() {
   let config = configStore.load();
   let session = storage.createSession({ workspace });
   let activeProvider = configStore.getDefaultProvider();
+
+  // extensions: plugins → skills / commands / mcp
+  let currentPlugins = pluginRegistry.discover({ workspace });
+  const skills = new SkillRegistry({ workspace, plugins: currentPlugins });
+  const mcp = new McpManager({ workspace, plugins: currentPlugins, emit: (e) => { if (e.type === "log") console.error(`${DIM}[mcp] ${e.message}${RESET}`); } });
+  let mcpLoaded = false;
+  function rediscoverExtensions() {
+    currentPlugins = pluginRegistry.discover({ workspace });
+    skills.setContext({ workspace, plugins: currentPlugins });
+    mcp.setContext({ workspace, plugins: currentPlugins });
+  }
+  async function ensureMcp() {
+    if (!mcpLoaded) { rediscoverExtensions(); await mcp.load().catch(() => {}); mcpLoaded = true; }
+  }
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   let running = false;
@@ -53,10 +71,14 @@ async function runTui() {
     if (!text) return;
 
     if (text.startsWith("/")) {
-      await handleSlash(text);
+      const r = await handleSlash(text);
+      if (r && r.sendText) await runTurn(r.sendText); // custom command expansion
       return;
     }
+    await runTurn(text);
+  }
 
+  async function runTurn(text) {
     if (!activeProvider) {
       console.log(RED + "尚未配置模型 provider。先运行: openzcode provider add --name free --base-url https://host/v1 --api-key KEY --model MODEL" + RESET);
       return;
@@ -78,6 +100,7 @@ async function runTui() {
           process.stdout.write(`  ${mark} ${event.ms}ms ${event.ok ? "" : String(event.output).slice(0, 200)}\n`);
           break;
         }
+        case "skill_loaded": process.stdout.write(`${DIM}◆ 已加载技能 ${event.name}${RESET}\n`); break;
         case "permission_request": break; // handled via permissionHandler
         case "usage": process.stdout.write(`${DIM}(tokens: ${event.promptTokens} in / ${event.completionTokens} out, ${event.durationMs}ms)${RESET}\n`); break;
         case "turn_done":
@@ -96,6 +119,7 @@ async function runTui() {
       });
 
     try {
+      await ensureMcp();
       await runAgentTurn({
         session,
         userText: text,
@@ -105,6 +129,7 @@ async function runTui() {
         emit,
         permissionHandler,
         signal: abortCtrl.signal,
+        extensions: { mcpManager: mcp, skills },
       });
     } finally {
       running = false;
@@ -130,6 +155,12 @@ async function runTui() {
   /yolo | /ask      切换权限模式 (yolo=自动放行危险操作)
   /todos            查看当前会话任务清单
   /test             测试当前 provider 连接
+  /skills           列出可用技能 (skill 工具自动触发)
+  /skill <名称>     查看技能内容
+  /mcp              列出 MCP 服务器与工具
+  /plugins          列出已安装插件
+  /commands         列出自定义 slash 命令
+  /reload           重载插件/技能/MCP 配置
   /quit             退出`);
         break;
       case "new":
@@ -194,12 +225,62 @@ async function runTui() {
         }
         break;
       }
+      case "skills": {
+        rediscoverExtensions();
+        const list = skills.list();
+        if (!list.length) { console.log("(无技能 — ~/.openzcode/skills/<name>/SKILL.md 或项目 .openzcode/skills/)"); break; }
+        for (const s of list) console.log(`→ ${s.name.padEnd(20)} [${s.scope}] ${s.description}`);
+        break;
+      }
+      case "skill": {
+        const s = skills.get(arg);
+        if (!s) { console.log(`未找到技能: ${arg} (/skills 查看列表)`); break; }
+        console.log(`${DIM}#${s.name} (${s.scope}) — ${s.description}${RESET}\n${s.body.slice(0, 2000)}`);
+        break;
+      }
+      case "mcp": {
+        rediscoverExtensions();
+        const l = await mcp.load();
+        if (!l.length) { console.log("(无 MCP server — ~/.openzcode/mcp.json 或项目 .mcp.json)"); break; }
+        for (const s of l) console.log(`${s.enabled ? "→" : " "} ${s.name.padEnd(16)} [${s.type}] ${s.status} tools=${s.toolCount} (${s.source})${s.error ? " ⚠ " + s.error : ""}`);
+        break;
+      }
+      case "plugins": {
+        rediscoverExtensions();
+        if (!currentPlugins.length) { console.log("(无插件 — ~/.openzcode/plugins/<name>/)"); break; }
+        for (const p of currentPlugins) {
+          const c = [p.skillsDir && "skills", p.commandsDir && "commands", p.mcpPath && "mcp"].filter(Boolean).join("+") || "—";
+          console.log(`→ ${p.name.padEnd(18)} v${p.version} [${p.scope}] ${c}`);
+        }
+        break;
+      }
+      case "commands": {
+        rediscoverExtensions();
+        const l = commands.list({ workspace, plugins: currentPlugins });
+        if (!l.length) { console.log("(无自定义命令 — ~/.openzcode/commands/<name>.md)"); break; }
+        for (const c of l) console.log(`/${c.name.padEnd(16)} [${c.scope}] ${c.description}`);
+        break;
+      }
+      case "reload": {
+        rediscoverExtensions();
+        await mcp.reload().catch(() => {});
+        const l = mcp.list();
+        console.log(`已重载: 插件 ${currentPlugins.length} 个, MCP server ${l.length} 个, 技能 ${skills.list().length} 个`);
+        break;
+      }
       case "quit": case "exit": case "q":
         rl.close();
         process.exit(0);
         break;
-      default:
+      default: {
+        // custom slash command (plugins / user / project) → expand & send
+        const expanded = commands.expand(text, { workspace, plugins: currentPlugins });
+        if (expanded) {
+          console.log(`${DIM}(命令 /${expanded.name} → 已展开${expanded.description ? ": " + expanded.description : ""})${RESET}`);
+          return { sendText: expanded.prompt };
+        }
         console.log(`未知命令 /${cmd}，/help 查看帮助`);
+      }
     }
   }
 
@@ -228,6 +309,11 @@ async function runPrint(userText, { yolo, workspace }) {
   }
   const session = storage.createSession({ workspace: ws, title: (userText || "print").slice(0, 30) });
 
+  // extensions (skills + mcp) work in print mode too
+  const plugins = pluginRegistry.discover({ workspace: ws });
+  const skills = new SkillRegistry({ workspace: ws, plugins });
+  const mcp = new McpManager({ workspace: ws, plugins, emit: () => {} });
+
   const emit = (event) => {
     switch (event.type) {
       case "tool_start": console.error(`${DIM}⚙ ${fmtToolInput(event.name, event.input)}${RESET}`); break;
@@ -246,7 +332,9 @@ async function runPrint(userText, { yolo, workspace }) {
     emit,
     permissionHandler: null, // no interactive approval; dangerous ops denied in ask mode unless yolo
     signal: undefined,
+    extensions: { mcpManager: mcp, skills },
   });
+  mcp.close();
 
   // print final assistant text
   const msgs = storage.getMessages(session.id);

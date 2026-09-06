@@ -1,0 +1,6 @@
+{
+  "name": "demo-plugin",
+  "version": "0.1.0",
+  "description": "OpenZCode 插件示例 — 贡献一个技能 + 一个命令 + 一个 MCP 服务器",
+  "mcpServersNote": "mcp.json 里的服务器会以 mcp__<name>__<tool> 命名空间暴露"
+}

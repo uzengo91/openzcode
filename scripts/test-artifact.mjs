@@ -68,6 +68,12 @@ console.log(`   期望: version=${EXPECT_VERSION} title="${EXPECT_TITLE}" app.na
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openzcode-artifact-"));
 fs.mkdirSync(SCRATCH, { recursive: true });
 
+// MCP fixture visible to the engine (stdio server shipped in this repo)
+fs.mkdirSync(path.join(tmp, "data"), { recursive: true });
+fs.writeFileSync(path.join(tmp, "data", "mcp.json"), JSON.stringify({
+  mcpServers: { calc: { command: process.execPath, args: [path.join(REPO, "scripts/fixtures/test-mcp-server.cjs")] } },
+}));
+
 let passed = 0, failed = 0;
 const check = (name, cond, detail = "") => {
   if (cond) { passed++; console.log(`  ✓ ${name}`); }
@@ -171,6 +177,14 @@ try {
   };
   walk(path.join(REPO, "packages/cli/src"));
   check(`任务4: 文件计数与真值一致 (${expectedCount})`, gotCount === String(expectedCount), `实际: ${gotCount}`);
+
+  // ---- Task 5: MCP tool — agent must call the configured mcp server ----
+  r = await runTask(session.id, `请使用 MCP 工具 mcp__calc__add 计算 11+22，把结果数字写入 .oz-itest/check-mcp.txt（一行，只要数字）。`);
+  check("任务5: agent 调用了 MCP 工具 mcp__calc__add", r.ev.ok === true, r.failures.join(" | ") || r.ev.error || "");
+  const gotMcp = fs.existsSync(path.join(SCRATCH, "check-mcp.txt"))
+    ? fs.readFileSync(path.join(SCRATCH, "check-mcp.txt"), "utf8").trim()
+    : null;
+  check("任务5: MCP 计算结果正确 (33)", gotMcp === "33", `实际: ${gotMcp}`);
 
   // ---- persistence sanity ----
   const msgs = await request("session/messages", { sessionId: session.id });

@@ -253,6 +253,9 @@ function handleSessionEvent({ sessionId, event }) {
       if (state.currentSession) state.currentSession.title = event.title;
       renderSessions();
       return;
+    case "skill_loaded":
+      toast(`已加载技能 ${event.name}`, "info");
+      return;
     case "turn_done": {
       state.running = false;
       state.liveText = "";
@@ -293,12 +296,21 @@ async function sendMessage(text) {
   if (state.running) return;
   try {
     const session = await ensureSession();
+    // custom slash commands (plugins / user / project) expand before sending
+    let prompt = text;
+    if (text.startsWith("/")) {
+      const expanded = await rpc("commands/expand", { text }).catch(() => null);
+      if (expanded && expanded.prompt) {
+        prompt = expanded.prompt;
+        toast(`命令 /${expanded.name} 已展开`, "info");
+      }
+    }
     state.items = [];           // fresh render of this turn's flow
     state.liveText = "";
     state.running = true;
     setComposerRunning(true);
     scheduleRender();
-    await rpc("session/send", { sessionId: session.id, text });
+    await rpc("session/send", { sessionId: session.id, text: prompt });
   } catch (e) {
     state.running = false;
     setComposerRunning(false);
@@ -433,6 +445,94 @@ function setEngineStatus(s) {
   text.textContent = map[s.state] || s.state;
 }
 
+/* ---------------- extensions UI: MCP + Skills ---------------- */
+
+async function loadExtensions() {
+  try {
+    const list = await rpc("mcp/list");
+    renderMcpServers(list || []);
+  } catch {}
+  try {
+    const skills = await rpc("skills/list");
+    renderSkills(skills || []);
+  } catch {}
+}
+
+const MCP_STATUS_LABEL = {
+  running: ["running", "运行中"], starting: ["starting", "启动中…"], stopped: ["stopped", "已停止"],
+  error: ["error", "错误"], crashed: ["error", "已崩溃"], disabled: ["stopped", "已禁用"],
+};
+
+function renderMcpServers(list) {
+  const box = $("#mcp-list");
+  box.textContent = "";
+  for (const s of list) {
+    const [cls, label] = MCP_STATUS_LABEL[s.status] || ["stopped", s.status];
+    const el = document.createElement("div");
+    el.className = "provider-item";
+    el.innerHTML = `
+      <span class="dot ${cls}" title="${label}"></span>
+      <span class="p-name">${esc(s.name)}</span>
+      <span class="p-detail">[${esc(s.type)}] ${esc(s.command)} · ${s.toolCount} 工具 · ${esc(s.source)}${s.error ? " · ⚠ " + esc(s.error) : ""}</span>
+      <button class="icon-btn a-toggle">${s.enabled ? "禁用" : "启用"}</button>`;
+    el.querySelector(".a-toggle").addEventListener("click", async () => {
+      await rpc("mcp/toggle", { name: s.name });
+      await loadExtensions();
+    });
+    box.appendChild(el);
+  }
+  if (!list.length) {
+    box.innerHTML = '<div class="about">暂无 MCP 服务器 — 用下方表单添加，或在项目 .mcp.json 配置</div>';
+  }
+}
+
+function renderSkills(skills) {
+  const box = $("#skills-list");
+  box.textContent = "";
+  for (const s of skills) {
+    const el = document.createElement("div");
+    el.className = "provider-item";
+    el.innerHTML = `
+      <span class="dot ready"></span>
+      <span class="p-name">${esc(s.name)}</span>
+      <span class="p-detail" title="${esc(s.description)}">${esc(s.description || "(无描述)")} · ${esc(s.scope)}</span>`;
+    box.appendChild(el);
+  }
+  if (!skills.length) {
+    box.innerHTML = '<div class="about">暂无技能 — 在 ~/.openzcode/skills/<名称>/SKILL.md 创建，或安装插件</div>';
+  }
+}
+
+async function saveMcpForm() {
+  const name = $("#mcp-name").value.trim();
+  const type = $("#mcp-type").value;
+  const msg = $("#mcp-save-msg");
+  if (!name) { msg.textContent = "名称必填"; msg.className = "test-result err"; return; }
+  const server = {};
+  if (type === "http") {
+    server.url = $("#mcp-url").value.trim();
+    if (!server.url) { msg.textContent = "URL 必填"; msg.className = "test-result err"; return; }
+    try { server.headers = JSON.parse($("#mcp-headers").value.trim() || "{}"); }
+    catch { msg.textContent = "Headers JSON 无效"; msg.className = "test-result err"; return; }
+  } else {
+    const parts = $("#mcp-command").value.trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) { msg.textContent = "启动命令必填"; msg.className = "test-result err"; return; }
+    server.command = parts[0];
+    if (parts.length > 1) server.args = parts.slice(1);
+  }
+  msg.textContent = "保存中…"; msg.className = "test-result";
+  try {
+    const { servers = {} } = await rpc("mcp/userConfig");
+    servers[name] = server;
+    await rpc("mcp/saveUserConfig", { servers });
+    msg.textContent = "已保存 ✓"; msg.className = "test-result ok";
+    $("#mcp-name").value = ""; $("#mcp-command").value = ""; $("#mcp-url").value = ""; $("#mcp-headers").value = "";
+    await loadExtensions();
+  } catch (e) {
+    msg.textContent = `失败: ${e.message}`; msg.className = "test-result err";
+  }
+}
+
 /* ---------------- settings ---------------- */
 
 async function loadConfig() {
@@ -561,7 +661,7 @@ function bindEvents() {
 
   $("#btn-settings").addEventListener("click", async () => {
     $("#settings-modal").classList.remove("hidden");
-    await loadConfig();
+    await Promise.all([loadConfig(), loadExtensions()]);
   });
   $("#btn-close-settings").addEventListener("click", () => $("#settings-modal").classList.add("hidden"));
   $("#settings-modal").addEventListener("click", (e) => {
@@ -569,6 +669,11 @@ function bindEvents() {
   });
   $("#pf-save").addEventListener("click", saveProvider);
   $("#pf-test").addEventListener("click", testProviderForm);
+  $("#mcp-save").addEventListener("click", saveMcpForm);
+  $("#mcp-reload").addEventListener("click", async () => {
+    await rpc("mcp/reload").catch(() => {});
+    await loadExtensions();
+  });
 
   document.querySelectorAll('input[name="perm"]').forEach((r) =>
     r.addEventListener("change", async () => {
@@ -597,10 +702,15 @@ function bindEvents() {
   window.openzcode.onStatus(async (s) => {
     setEngineStatus(s);
     if (s.state === "ready") {
-      await loadConfig().catch(() => {});
+      await Promise.all([loadConfig().catch(() => {}), loadExtensions().catch(() => {})]);
       await refreshSessions();
     }
   });
+  if (window.openzcode.onMcpStatus) {
+    window.openzcode.onMcpStatus(() => {
+      if (!$("#settings-modal").classList.contains("hidden")) loadExtensions();
+    });
+  }
 }
 
 async function boot() {
