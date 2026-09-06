@@ -1,0 +1,14 @@
+{
+  "name": "@openzcode/app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenZCode desktop App — Electron GUI frontend driving the CLI engine over stdio JSON-RPC",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^41.0.3"
+  },
+  "license": "Apache-2.0"
+}

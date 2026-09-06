@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1" # CI 只构建/测试 CLI, 无需 Electron 二进制
+
+      - name: Build CLI bundle
+        run: node scripts/build-cli.mjs
+
+      - name: Smoke test (no LLM)
+        run: node scripts/test-ci.mjs
+
+      - name: LLM E2E (optional, needs secret)
+        env:
+          OPENZCODE_TEST_API_KEY: ${{ secrets.OPENZCODE_TEST_API_KEY }}
+          OPENZCODE_TEST_BASE_URL: ${{ secrets.OPENZCODE_TEST_BASE_URL }}
+          OPENZCODE_TEST_MODEL: ${{ secrets.OPENZCODE_TEST_MODEL }}
+        if: ${{ env.OPENZCODE_TEST_API_KEY != '' }}
+        run: node scripts/test-e2e.mjs
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openzcode.cjs
+          path: packages/cli/dist/openzcode.cjs

@@ -1,0 +1,27 @@
+{
+  "name": "openzcode",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenZCode — single-binary dual-form coding agent (CLI + Electron App), MVP inspired by ZCode architecture",
+  "workspaces": [
+    "packages/cli",
+    "packages/app"
+  ],
+  "scripts": {
+    "build:cli": "node scripts/build-cli.mjs",
+    "start": "npm run build:cli && npm run start --workspace packages/app",
+    "test:e2e": "node scripts/test-e2e.mjs",
+    "test:ci": "node scripts/test-ci.mjs",
+    "test:artifact": "node scripts/test-artifact.mjs",
+    "package": "node scripts/package-release.mjs"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uzengo91/openzcode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/uzengo91/openzcode/issues"
+  },
+  "homepage": "https://github.com/uzengo91/openzcode#readme"
+}

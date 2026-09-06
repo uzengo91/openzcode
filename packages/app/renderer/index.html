@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <title>OpenZCode</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="titlebar">
+    <div class="traffic-spacer"></div>
+    <div class="app-title">OpenZCode</div>
+    <div class="title-status">
+      <span id="engine-dot" class="dot starting"></span>
+      <span id="engine-text">连接中…</span>
+    </div>
+  </div>
+
+  <div id="layout">
+    <!-- ============ Sidebar ============ -->
+    <aside id="sidebar">
+      <button id="btn-new-session" class="btn primary block">＋ 新会话</button>
+
+      <div class="workspace-row" title="切换工作目录">
+        <span class="ws-icon">📁</span>
+        <span id="workspace-path" class="ws-path">…</span>
+        <button id="btn-pick-workspace" class="icon-btn">切换</button>
+      </div>
+
+      <div class="section-label">会话</div>
+      <div id="session-list" class="session-list"></div>
+
+      <div class="sidebar-footer">
+        <div id="todo-panel" class="todo-panel hidden">
+          <div class="section-label">任务清单</div>
+          <div id="todo-items"></div>
+        </div>
+        <div class="provider-badge">
+          <span id="provider-name">未配置模型</span>
+          <button id="btn-settings" class="icon-btn" title="设置">⚙</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ============ Main ============ -->
+    <main id="main">
+      <header id="chat-header">
+        <div class="session-title-row">
+          <span id="session-title">新会话</span>
+          <span id="permission-mode-chip" class="chip">ask</span>
+        </div>
+        <div class="header-right">
+          <span id="model-badge" class="chip subtle">—</span>
+          <span id="usage-badge" class="chip subtle hidden"></span>
+        </div>
+      </header>
+
+      <div id="transcript">
+        <div id="empty-state" class="empty-state">
+          <div class="logo">◆</div>
+          <h1>OpenZCode</h1>
+          <p>单二进制双形态编码 Agent · Electron App 驱动 CLI 引擎（stdio JSON-RPC）</p>
+          <div class="hints">
+            <div class="hint">阅读 / 修改代码，运行命令与测试</div>
+            <div class="hint">先在 ⚙ 设置中配置模型服务</div>
+            <div class="hint">危险操作会请求批准（ask 模式）</div>
+          </div>
+        </div>
+        <div id="items"></div>
+      </div>
+
+      <footer id="composer-wrap">
+        <div id="toast-zone"></div>
+        <div id="composer" class="composer">
+          <textarea id="input" rows="1" placeholder="描述任务… (Enter 发送, Shift+Enter 换行)"></textarea>
+          <button id="btn-send" class="btn primary">发送</button>
+          <button id="btn-stop" class="btn danger hidden">停止</button>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- ============ Settings modal ============ -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>设置</h2>
+        <button id="btn-close-settings" class="icon-btn">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <section class="settings-section">
+          <h3>模型服务 Providers</h3>
+          <div id="provider-list" class="provider-list"></div>
+
+          <div class="provider-form">
+            <h4 id="pf-title">添加 Provider</h4>
+            <div class="form-grid">
+              <label>名称<input id="pf-name" placeholder="my-provider" /></label>
+              <label>模型<input id="pf-model" placeholder="model-id" /></label>
+              <label class="span2">Base URL<input id="pf-baseurl" placeholder="https://host/v1" /></label>
+              <label class="span2">API Key<input id="pf-apikey" type="password" placeholder="sk-…" /></label>
+              <label>协议
+                <select id="pf-protocol">
+                  <option value="openai">OpenAI 兼容 (chat/completions)</option>
+                  <option value="anthropic">Anthropic 兼容 (messages)</option>
+                </select>
+              </label>
+              <label class="checkbox-row span2">
+                <input type="checkbox" id="pf-default" /> 设为默认
+              </label>
+            </div>
+            <div class="form-actions">
+              <button id="pf-test" class="btn">测试连接</button>
+              <span id="pf-test-result" class="test-result"></span>
+              <button id="pf-save" class="btn primary">保存</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3>权限模式</h3>
+          <div class="perm-options">
+            <label class="perm-option">
+              <input type="radio" name="perm" value="ask" />
+              <div><b>ask</b><span>bash / 写文件 / 编辑文件 等危险操作需要批准</span></div>
+            </label>
+            <label class="perm-option">
+              <input type="radio" name="perm" value="yolo" />
+              <div><b>yolo</b><span>自动放行全部工具（谨慎使用）</span></div>
+            </label>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3>关于</h3>
+          <p class="about" id="about-line">OpenZCode MVP — CLI + Electron App · app-server over stdio JSON-RPC</p>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
