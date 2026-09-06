@@ -67,7 +67,7 @@ function makeSseParser(onEvent) {
   };
 }
 
-async function streamOpenAI({ provider, system, messages, tools, signal, onDelta }) {
+async function streamOpenAI({ provider, system, messages, tools, signal, onDelta, openConnection }) {
   const body = {
     model: provider.model,
     messages: toOpenAIMessages(system, messages),
@@ -85,9 +85,10 @@ async function streamOpenAI({ provider, system, messages, tools, signal, onDelta
   const headers = { "content-type": "application/json" };
   if (provider.apiKey) headers.authorization = `Bearer ${provider.apiKey}`;
 
-  const res = await fetch(joinUrl(provider.baseUrl, "/chat/completions"), {
+  const send = () => fetch(joinUrl(provider.baseUrl, "/chat/completions"), {
     method: "POST", headers, body: JSON.stringify(body), signal,
   });
+  const res = openConnection ? await openConnection(send, signal) : await send();
   if (!res.ok) throw new Error(await parseError(res));
 
   const textChunks = [];

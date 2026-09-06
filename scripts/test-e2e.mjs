@@ -14,9 +14,9 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const BUNDLE = path.join(ROOT, "packages/cli/dist/openzcode.cjs");
 
-const BASE_URL = process.env.OPENZCODE_TEST_BASE_URL || "https://freeshare.cc.cd/v1";
+const BASE_URL = process.env.OPENZCODE_TEST_BASE_URL || "https://llm-uceufy13uqn9w0g0.cn-beijing.maas.aliyuncs.com/compatible-mode/v1";
 const API_KEY = process.env.OPENZCODE_TEST_API_KEY || "";
-const MODEL = process.env.OPENZCODE_TEST_MODEL || "aio";
+const MODEL = process.env.OPENZCODE_TEST_MODEL || "ZHIPU/GLM-5.3-Flash";
 
 if (!API_KEY) {
   console.log("跳过 LLM E2E: 未设置 OPENZCODE_TEST_API_KEY 环境变量 (不视为失败)");

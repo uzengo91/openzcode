@@ -45,7 +45,7 @@ function messagesUrl(baseUrl) {
   return base.endsWith("/v1") ? `${base}/messages` : `${base}/v1/messages`;
 }
 
-async function streamAnthropic({ provider, system, messages, tools, signal, onDelta }) {
+async function streamAnthropic({ provider, system, messages, tools, signal, onDelta, openConnection }) {
   const body = {
     model: provider.model,
     max_tokens: 8192,
@@ -68,9 +68,10 @@ async function streamAnthropic({ provider, system, messages, tools, signal, onDe
     headers.authorization = `Bearer ${provider.apiKey}`;
   }
 
-  const res = await fetch(messagesUrl(provider.baseUrl), {
+  const send = () => fetch(messagesUrl(provider.baseUrl), {
     method: "POST", headers, body: JSON.stringify(body), signal,
   });
+  const res = openConnection ? await openConnection(send, signal) : await send();
   if (!res.ok) throw new Error(await parseError(res));
 
   const textChunks = [];
