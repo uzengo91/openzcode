@@ -32,16 +32,21 @@ function toOpenAIMessages(system, messages, { imageWindow = 3 } = {}) {
       }
       out.push(msg);
     } else if (m.role === "tool") {
-      for (const p of m.parts || []) {
-        if (p.type === "tool_result") {
-          const contentParts = [];
-          if (p.text !== undefined || p.content !== undefined) {
-            const txt = typeof (p.content ?? p.text) === "string" ? (p.content ?? p.text) : JSON.stringify(p.content ?? p.text);
-            contentParts.push({ type: "text", text: txt });
-          }
-          for (const img of p.images || []) contentParts.push(imageToOpenAI(img, keepImages));
-          out.push({ role: "tool", tool_call_id: p.tool_use_id, content: contentParts });
-        }
+      // each stored tool message carries one tool_result + optional image parts
+      const trs = (m.parts || []).filter((p) => p.type === "tool_result");
+      const images = (m.parts || []).filter((p) => p.type === "image");
+      if (!trs.length && !images.length) return; // forEach: skip this message
+      trs.forEach((p, idx) => {
+        const txt = typeof (p.content ?? p.text) === "string" ? (p.content ?? p.text) : JSON.stringify(p.content ?? p.text);
+        const contentParts = [{ type: "text", text: txt }];
+        for (const img of p.images || []) contentParts.push(imageToOpenAI(img, keepImages));
+        // attach the message-level images to the last tool_result of this message
+        if (idx === trs.length - 1) for (const img of images) contentParts.push(imageToOpenAI(img, keepImages));
+        out.push({ role: "tool", tool_call_id: p.tool_use_id, content: contentParts });
+      });
+      if (!trs.length && images.length) {
+        // orphan images (no tool_result): emit as a user message
+        out.push({ role: "user", content: images.map((img) => imageToOpenAI(img, keepImages)) });
       }
     }
   });

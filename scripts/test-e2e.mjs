@@ -225,7 +225,10 @@ try {
   request("session/send", { sessionId: session.id, text: "请用 computer_screenshot 截取当前屏幕, 然后用一句话描述你看到了什么(如果是纯色/锁定屏幕也照实说)。" }).catch(() => {});
   const turn7 = await waitForTurnDone(240000);
   const shotUsed = eventLog.some((e) => e.event?.type === "tool_start" && e.event.name === "computer_screenshot");
+  const text7 = eventLog.filter((e) => e.event?.type === "message" && e.event.message.role === "assistant")
+    .flatMap((e) => e.event.message.parts).filter((p) => p.type === "text").map((p) => p.text).join(" ");
   check("电脑: agent 调用了 computer_screenshot", turn7.ok && shotUsed, `tools: ${eventLog.filter((e) => e.event?.type === "tool_start").map((e) => e.event.name).join(",")}`);
+  check("电脑: 模型真正看到了图像(非空描述)", turn7.ok && !/无法描述|看不到图|未成功加载/.test(text7 || ""), (text7 || "").slice(0, 120));
 
   console.log(`\n== 结果: ${passed} 通过, ${failed} 失败 ==`);
   console.log(`   事件总数 ${eventLog.length + " (含首轮)"} | 工具调用: ${[...new Set(toolStarts)].join(", ")}`);

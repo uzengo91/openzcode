@@ -49,6 +49,13 @@ function toAnthropicMessages(messages, { imageWindow = 3 } = {}) {
           blocks.push({ type: "tool_result", tool_use_id: p.tool_use_id, content: inner, is_error: !!p.is_error });
         }
       }
+      for (const p of m.parts || []) {
+        if (p.type === "image") {
+          blocks.push(keep
+            ? { type: "image", source: { type: "base64", media_type: p.mime || "image/png", data: p.data } }
+            : { type: "text", text: "[截图已省略]" });
+        }
+      }
       if (blocks.length) pushUser(blocks);
     }
   });
