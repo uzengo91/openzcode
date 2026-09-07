@@ -1,6 +1,6 @@
 {
   "name": "@openzcode/app",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "OpenZCode desktop App — Electron GUI frontend driving the CLI engine over stdio JSON-RPC",
   "main": "main.js",
