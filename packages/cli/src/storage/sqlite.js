@@ -98,6 +98,19 @@ class SqliteStorage {
       .map((r) => ({ ...r, parts: safeParse(r.parts, []) }));
   }
 
+  /** full history rewrite (compact): wipes messages, inserts the new list */
+  replaceMessages(sessionId, messages) {
+    const run = this.db.transaction((sid, list) => {
+      this.db.prepare("DELETE FROM message WHERE session_id = ?").run(sid);
+      const ins = this.db.prepare("INSERT INTO message (id, session_id, role, parts, created_at) VALUES (?,?,?,?,?)");
+      for (const m of list) {
+        ins.run(id("msg"), sid, m.role, JSON.stringify(m.parts || []), m.createdAt || m.created_at || now());
+      }
+      this.touchSession(sid);
+    });
+    run(sessionId, messages);
+  }
+
   setTodos(sessionId, items) {
     this.db.prepare(
       "INSERT INTO todo (session_id, items, updated_at) VALUES (?,?,?) " +

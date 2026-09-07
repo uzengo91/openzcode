@@ -121,6 +121,76 @@ function renderPermCard(item) {
   return card;
 }
 
+function renderQuestionCard(item) {
+  const card = document.createElement("div");
+  card.className = "question-card" + (item.status !== "pending" ? " resolved" : "");
+  card.dataset.qid = item.id;
+  const optsHtml = (item.options || []).map((o, i) => {
+    const label = typeof o === "string" ? o : o.label || "";
+    const desc = typeof o === "string" ? "" : o.description || "";
+    return item.status === "pending"
+      ? `<button class="q-opt" data-i="${i}"><span class="q-label">${esc(label)}</span>${desc ? `<span class="q-desc">${esc(desc)}</span>` : ""}</button>`
+      : "";
+  }).join("");
+  card.innerHTML = `
+    <div class="q-head">❓ ${esc(item.header || "请选择")} — ${esc(item.question)}</div>
+    ${item.status === "pending" ? `<div class="q-opts">${optsHtml}<button class="q-opt q-other">其他(自由回答)</button></div>` : `<div class="q-result">已选择: ${esc((item.answers || []).join(", "))}</div>`}`;
+  if (item.status === "pending") {
+    card.querySelectorAll(".q-opt[data-i]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const opt = item.options[Number(btn.dataset.i)];
+        const label = typeof opt === "string" ? opt : opt.label;
+        await rpc("session/answer", { id: item.id, answers: [label] });
+      });
+    });
+    const other = card.querySelector(".q-other");
+    if (other) other.addEventListener("click", async () => {
+      const text = prompt("你的回答:");
+      if (text != null) await rpc("session/answer", { id: item.id, answers: [text] });
+    });
+  }
+  return card;
+}
+
+function renderPlanCard(item) {
+  const card = document.createElement("div");
+  card.className = "plan-card" + (item.status !== "pending" ? " resolved" : "");
+  const body = document.createElement("div");
+  body.innerHTML = `<div class="pl-head">📋 实施计划 ${item.status === "pending" ? "(等待批准)" : item.status === "approved" ? "— 已批准 ✓" : "— 已拒绝"}</div>
+    <div class="pl-body">${mdToHtml(item.plan)}</div>`;
+  card.appendChild(body);
+  if (item.status === "pending") {
+    const actions = document.createElement("div");
+    actions.className = "p-actions";
+    actions.innerHTML = `<button class="btn primary">✓ 批准并执行</button><button class="btn danger">✗ 拒绝</button>`;
+    actions.children[0].addEventListener("click", async () => {
+      if (state.currentSession) await rpc("session/approvePlan", { sessionId: state.currentSession.id, id: item.id, allow: true });
+    });
+    actions.children[1].addEventListener("click", async () => {
+      if (state.currentSession) await rpc("session/approvePlan", { sessionId: state.currentSession.id, id: item.id, allow: false });
+    });
+    card.appendChild(actions);
+  }
+  return card;
+}
+
+function renderSubagentCard(item) {
+  const el = document.createElement("div");
+  el.className = "subagent-card";
+  const icon = item.status === "running" ? '<span class="s-icon s-spin">◐</span>' : item.status === "done" ? '<span class="s-icon s-ok">✓</span>' : '<span class="s-icon s-err">✗</span>';
+  el.innerHTML = `${icon}<span><b>子代理</b> [${esc(item.agentType || "general-purpose")}] ${esc(item.description)}</span>${item.status === "running" && item.lastTool ? `<span class="s-meta">· ${esc(item.lastTool)}…</span>` : ""}`;
+  return el;
+}
+
+function renderCompactCard(item) {
+  const el = document.createElement("div");
+  el.className = "compact-card";
+  el.textContent = item.status === "running"
+    ? `🗜 正在压缩会话… (${item.tokens || "?"} tokens / ${item.messages || "?"} 条消息)`
+    : "🗜 会话已压缩, 旧消息已替换为摘要";
+  return el;
+}
+
 function renderUserItem(item) {
   const el = document.createElement("div");
   el.className = "msg user";
@@ -155,6 +225,10 @@ function renderTranscript() {
       // tool cards render inside their owning assistant bubble; a standalone
       // fallback would duplicate them, so skip here.
     } else if (item.kind === "perm") itemsEl.appendChild(renderPermCard(item));
+    else if (item.kind === "question") itemsEl.appendChild(renderQuestionCard(item));
+    else if (item.kind === "plan") itemsEl.appendChild(renderPlanCard(item));
+    else if (item.kind === "subagent") itemsEl.appendChild(renderSubagentCard(item));
+    else if (item.kind === "compact") itemsEl.appendChild(renderCompactCard(item));
   }
   if (state.liveText) {
     const el = document.createElement("div");
@@ -256,6 +330,43 @@ function handleSessionEvent({ sessionId, event }) {
     case "skill_loaded":
       toast(`已加载技能 ${event.name}`, "info");
       return;
+    case "question_request":
+      state.items.push({ kind: "question", id: event.id, question: event.question, header: event.header, options: event.options || [], multiSelect: !!event.multiSelect, status: "pending" });
+      break;
+    case "question_resolved": {
+      const q = state.items.find((x) => x.kind === "question" && x.id === event.id);
+      if (q) { q.status = "resolved"; q.answers = event.answers || []; }
+      break;
+    }
+    case "plan_request":
+      state.items.push({ kind: "plan", id: event.id, plan: event.plan || "", status: "pending" });
+      break;
+    case "plan_resolved": {
+      const pl = state.items.find((x) => x.kind === "plan" && x.id === event.id);
+      if (pl) { pl.status = event.allow ? "approved" : "rejected"; }
+      break;
+    }
+    case "subagent_started":
+      state.items.push({ kind: "subagent", id: event.id, description: event.description, agentType: event.agentType, status: "running" });
+      break;
+    case "subagent_progress": {
+      const sg = state.items.filter((x) => x.kind === "subagent").find((x) => x.id === event.id);
+      if (sg) sg.lastTool = event.tool;
+      return; // avoid full re-render churn
+    }
+    case "subagent_finished": {
+      const sg2 = state.items.filter((x) => x.kind === "subagent").find((x) => x.id === event.id);
+      if (sg2) { sg2.status = event.ok ? "done" : "error"; sg2.lastTool = null; }
+      break;
+    }
+    case "compact_started":
+      state.items.push({ kind: "compact", id: "compact_" + Date.now(), tokens: event.tokens, messages: event.messages, status: "running" });
+      break;
+    case "compact_done": {
+      const cc = [...state.items].reverse().find((x) => x.kind === "compact");
+      if (cc) cc.status = event.compacted ? "done" : "skipped";
+      break;
+    }
     case "turn_done": {
       state.running = false;
       state.liveText = "";
@@ -802,12 +913,140 @@ async function testProviderForm() {
   }
 }
 
+/* ---------------- memory & hooks modals (v0.5) ---------------- */
+
+async function loadMemoryModal() {
+  const list = await rpc("memory/list").catch(() => []);
+  const box = $("#memory-list");
+  box.textContent = "";
+  for (const m of list) {
+    const el = document.createElement("div");
+    el.className = "provider-item";
+    el.innerHTML = `<span class="dot ready"></span><span class="p-name">${esc(m.name)}</span><span class="p-detail">${esc(m.description || "")}</span><button class="icon-btn a-view">查看</button>`;
+    el.querySelector(".a-view").addEventListener("click", async () => {
+      const r = await rpc("memory/read", { name: m.name }).catch(() => ({ output: "读取失败" }));
+      const detail = $("#memory-detail");
+      detail.classList.remove("hidden");
+      detail.querySelector("pre").textContent = r.output || "";
+    });
+    box.appendChild(el);
+  }
+  if (!list.length) box.innerHTML = '<div class="about">暂无记忆 — agent 会用 memory_write 自动记录, 也可在下方手动添加</div>';
+}
+
+function bindMemoryModal() {
+  $("#btn-memory").addEventListener("click", async () => {
+    $("#memory-modal").classList.remove("hidden");
+    await loadMemoryModal();
+  });
+  $("#btn-close-memory").addEventListener("click", () => $("#memory-modal").classList.add("hidden"));
+  $("#memory-modal").addEventListener("click", (e) => {
+    if (e.target === $("#memory-modal")) $("#memory-modal").classList.add("hidden");
+  });
+  $("#mem-save").addEventListener("click", async () => {
+    const msg = $("#mem-msg");
+    const name = $("#mem-name").value.trim();
+    const body = $("#mem-body").value.trim();
+    if (!name || !body) { msg.textContent = "标识与内容必填"; msg.className = "test-result err"; return; }
+    const r = await rpc("memory/write", { name, body, description: $("#mem-desc").value.trim() }).catch((e) => ({ ok: false, output: e.message }));
+    msg.textContent = r.ok ? "已保存 ✓" : `失败: ${r.output}`;
+    msg.className = "test-result " + (r.ok ? "ok" : "err");
+    if (r.ok) { $("#mem-name").value = ""; $("#mem-body").value = ""; $("#mem-desc").value = ""; await loadMemoryModal(); }
+  });
+}
+
+async function loadHooksModal() {
+  const list = await rpc("hooks/list").catch(() => []);
+  const box = $("#hooks-list");
+  box.textContent = "";
+  for (const h of list) {
+    const el = document.createElement("div");
+    el.className = "provider-item";
+    el.innerHTML = `<span class="dot ${h.scope === "project" ? "ready" : "starting"}"></span><span class="p-name">${esc(h.event)}${h.tool ? ":" + esc(h.tool) : ""}</span><span class="p-detail">${esc(h.name)} · ${esc(h.scope)}</span>`;
+    box.appendChild(el);
+  }
+  if (!list.length) box.innerHTML = '<div class="about">暂无 hooks — 在 ~/.openzcode/hooks/ 或项目 .openzcode/hooks/ 放置脚本</div>';
+}
+
+function bindHooksModal() {
+  $("#btn-hooks").addEventListener("click", async () => {
+    $("#hooks-modal").classList.remove("hidden");
+    await loadHooksModal();
+  });
+  $("#btn-close-hooks").addEventListener("click", () => $("#hooks-modal").classList.add("hidden"));
+  $("#hooks-modal").addEventListener("click", (e) => {
+    if (e.target === $("#hooks-modal")) $("#hooks-modal").classList.add("hidden");
+  });
+}
+
+/* ---------------- composer toolbar (mode/model/effort) ---------------- */
+
+function bindComposerToolbar() {
+  const modeSelect = $("#mode-select");
+  modeSelect.addEventListener("change", async () => {
+    const v = modeSelect.value;
+    if (v === "plan") {
+      // plan is a client hint: we just toast; actual plan flow uses EnterPlanMode tool.
+      // Persisted mode remains ask/yolo for safety gating.
+      toast("计划模式: 对话里说"先规划"或让模型 EnterPlanMode; 写操作将被拦截", "info");
+      return;
+    }
+    await rpc("config/setOptions", { permissionMode: v }).catch(() => {});
+    await loadConfig();
+  });
+  // reflect config on open
+  const syncMode = () => {
+    const pm = state.config?.permissionMode || "ask";
+    modeSelect.value = pm === "yolo" ? "yolo" : "ask";
+  };
+  const origLoadConfig = loadConfig;
+  loadConfig = async function () { await origLoadConfig(); syncMode(); };
+
+  const modelSelect = $("#model-select");
+  const fillModels = () => {
+    modelSelect.textContent = "";
+    for (const p of state.config?.providers || []) {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = `${p.name} · ${p.model}`;
+      if (p.id === state.config?.defaultProviderId) opt.selected = true;
+      modelSelect.appendChild(opt);
+    }
+  };
+  const origLoadConfig2 = loadConfig;
+  loadConfig = async function () { await origLoadConfig2(); fillModels(); };
+  modelSelect.addEventListener("change", async () => {
+    if (modelSelect.value) {
+      await rpc("config/setDefaultProvider", { idOrName: modelSelect.value }).catch(() => {});
+      await loadConfig();
+    }
+  });
+  $("#effort-select").addEventListener("change", (e) => {
+    toast(`推理档位: ${e.target.value === "low" ? "低(更快更省)" : "最高(更深推理)"} — 将随下次请求生效`, "info");
+  });
+}
+
+/* ---------------- session search (G1) ---------------- */
+
+function bindSessionSearch() {
+  $("#session-search").addEventListener("input", (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    document.querySelectorAll("#session-list .session-item").forEach((el) => {
+      el.style.display = !q || el.textContent.toLowerCase().includes(q) ? "" : "none";
+    });
+  });
+}
+
 /* ---------------- boot ---------------- */
 
 function bindEvents() {
   $("#btn-new-session").addEventListener("click", newSession);
   bindAutomationsModal();
   bindMarketplaceModal();
+  bindMemoryModal();
+  bindHooksModal();
+  bindComposerToolbar();
+  bindSessionSearch();
 
   const input = $("#input");
   input.addEventListener("keydown", (e) => {

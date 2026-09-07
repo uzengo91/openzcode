@@ -77,6 +77,16 @@ class JsonStorage {
     return JSON.parse(JSON.stringify(this.data.messages.filter((x) => x.session_id === sessionId)));
   }
 
+  /** full history rewrite (compact) */
+  replaceMessages(sessionId, messages) {
+    this.data.messages = this.data.messages.filter((x) => x.session_id !== sessionId);
+    for (const m of messages) {
+      this.data.messages.push({ id: id("msg"), session_id: sessionId, role: m.role, parts: m.parts || [], created_at: m.createdAt || m.created_at || now() });
+    }
+    this.touchSession(sessionId);
+    this._flush();
+  }
+
   setTodos(sessionId, items) {
     this.data.todos[sessionId] = { items: items || [], updated_at: now() };
     this._flush();

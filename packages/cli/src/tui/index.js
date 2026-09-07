@@ -99,7 +99,7 @@ async function runTui() {
     }
   }
 
-  async function handleInput(raw) {
+  let handleInput = async function (raw) {
     const text = raw.trim();
     if (!text) return;
 
@@ -172,7 +172,7 @@ async function runTui() {
       console.log("");
       if (rl.closed) process.exit(0); // stdin EOF while turn was running
     }
-  }
+  };
 
   async function handleSlash(text) {
     const [cmd, ...rest] = text.slice(1).split(/\s+/);
@@ -195,6 +195,9 @@ async function runTui() {
   /commands         列出自定义 slash 命令
   /reload           重载插件/技能/MCP 配置
   /automations      自动化任务列表 (run|del|on|off <id>)
+  /compact          压缩当前会话(旧消息→摘要)
+  /fork             fork 当前会话到新会话
+  /memory [名|write 名 内容] 查看/读写长期记忆
   /quit             退出`);
         break;
       case "new":
@@ -321,6 +324,40 @@ async function runTui() {
         console.log(`${DIM}  (/automations run|del|on|off <id>)${RESET}`);
         break;
       }
+      case "compact": {
+        try {
+          const { summarize } = require("../compact");
+          console.log(`${DIM}压缩会话…${RESET}`);
+          const r = await summarize(activeProvider, storage, session.id, {});
+          console.log(r.compacted ? `${GREEN}✓ 已压缩: 替换 ${r.replacedMessages} 条旧消息${RESET}` : `${DIM}${r.reason || "无需压缩"}${RESET}`);
+        } catch (e) { console.log(`${RED}✗ ${e.message}${RESET}`); }
+        break;
+      }
+      case "fork": {
+        const msgs = storage.getMessages(session.id);
+        const forked = storage.createSession({ workspace, title: `fork: ${session.title}`.slice(0, 50), parentId: session.id });
+        for (const m of msgs) storage.appendMessage(forked.id, m.role, m.parts);
+        session = forked;
+        console.log(`${DIM}已 fork 到新会话 ${forked.id} (${msgs.length} 条消息)${RESET}`);
+        break;
+      }
+      case "memory": {
+        const mem = require("../memory");
+        if (!arg) {
+          const items = mem.listIndex(workspace);
+          console.log(items.length ? items.map((i) => `- ${i.name}: ${i.description}`).join("\n") : "(记忆库为空 — /memory write <name> <内容>)");
+          break;
+        }
+        if (rest[0] === "write" && rest[1]) {
+          const body = rest.slice(2).join(" ");
+          const r = mem.write(workspace, rest[1], body || "(空)", rest[1]);
+          console.log(r.ok ? `✓ 已写入记忆 ${rest[1]}` : `✗ ${r.output}`);
+          break;
+        }
+        const r = mem.read(workspace, arg);
+        console.log(r.output);
+        break;
+      }
       case "quit": case "exit": case "q":
         rl.close();
         process.exit(0);
@@ -340,7 +377,38 @@ async function runTui() {
   banner();
   prompt();
 
+  readline.emitKeypressEvents(process.stdin);
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
   rl.on("close", () => { if (!running) process.exit(0); });
+  // ↑/↓ input history (this session's user messages)
+  const inputHistory = [];
+  let historyIdx = -1;
+  let historyDraft = "";
+  const origHandleInput = handleInput;
+  handleInput = async function (raw) {
+    const text = String(raw ?? "").trim();
+    if (text && !text.startsWith("/")) { inputHistory.push(text); if (inputHistory.length > 200) inputHistory.shift(); }
+    historyIdx = -1; historyDraft = "";
+    return origHandleInput(raw);
+  };
+  rl.on("keypress", (str, key) => {
+    if (!key || running) return;
+    if (key.name === "up") {
+      if (!inputHistory.length) return;
+      if (historyIdx === -1) { historyDraft = rl.line; historyIdx = inputHistory.length; }
+      if (historyIdx > 0) {
+        historyIdx--;
+        rl.line = inputHistory[historyIdx];
+        if (rl._refreshLine) rl._refreshLine();
+      }
+    } else if (key.name === "down") {
+      if (historyIdx === -1) return;
+      historyIdx++;
+      if (historyIdx >= inputHistory.length) { historyIdx = -1; rl.line = historyDraft; }
+      else rl.line = inputHistory[historyIdx];
+      if (rl._refreshLine) rl._refreshLine();
+    }
+  });
   rl.on("SIGINT", () => {
     if (running && stopFn) { stopFn(); console.log(`${DIM}(停止当前任务… 再按一次 Ctrl-C 退出)${RESET}`); return; }
     rl.close();

@@ -17,13 +17,22 @@
   </div>
 
   <div id="layout">
-    <!-- ============ Sidebar ============ -->
+    <!-- ============ Sidebar (ZCode style) ============ -->
     <aside id="sidebar">
-      <button id="btn-new-session" class="btn primary block">＋ 新会话</button>
+      <button id="btn-new-session" class="btn primary block">🡒 新建任务</button>
 
       <div class="sidebar-quick">
         <button id="btn-automations" class="quick-btn">⏰ 自动化</button>
         <button id="btn-marketplace" class="quick-btn">▦ 插件市场</button>
+      </div>
+
+      <div class="sidebar-quick">
+        <button id="btn-memory" class="quick-btn">◆ 记忆</button>
+        <button id="btn-hooks" class="quick-btn">⛓ Hooks</button>
+      </div>
+
+      <div class="search-row">
+        <input id="session-search" type="text" placeholder="🔍 搜索任务…" />
       </div>
 
       <div class="workspace-row" title="切换工作目录">
@@ -32,7 +41,7 @@
         <button id="btn-pick-workspace" class="icon-btn">切换</button>
       </div>
 
-      <div class="section-label">会话</div>
+      <div class="section-label">任务</div>
       <div id="session-list" class="session-list"></div>
 
       <div class="sidebar-footer">
@@ -76,10 +85,26 @@
 
       <footer id="composer-wrap">
         <div id="toast-zone"></div>
-        <div id="composer" class="composer">
+        <div id="composer" class="composer card">
           <textarea id="input" rows="1" placeholder="描述任务… (Enter 发送, Shift+Enter 换行)"></textarea>
-          <button id="btn-send" class="btn primary">发送</button>
-          <button id="btn-stop" class="btn danger hidden">停止</button>
+          <div class="composer-toolbar">
+            <div class="tb-left">
+              <select id="mode-select" class="tb-select" title="权限模式: plan 先规划后执行 / ask 危险操作需批准 / yolo 自动放行">
+                <option value="ask">🛡 完全访问</option>
+                <option value="plan">📋 计划模式</option>
+                <option value="yolo">⚡ 自动放行</option>
+              </select>
+              <select id="model-select" class="tb-select" title="模型"></select>
+            </div>
+            <div class="tb-right">
+              <select id="effort-select" class="tb-select" title="推理档位">
+                <option value="low">🧠 低</option>
+                <option value="high" selected>🧠 最高</option>
+              </select>
+              <button id="btn-send" class="btn primary">发送</button>
+              <button id="btn-stop" class="btn danger hidden">停止</button>
+            </div>
+          </div>
         </div>
       </footer>
     </main>
@@ -154,6 +179,45 @@
             <span id="mkt-msg" class="test-result"></span>
           </div>
         </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Memory modal ============ -->
+  <div id="memory-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>◆ 记忆</h2>
+        <button id="btn-close-memory" class="icon-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <section class="settings-section">
+          <div id="memory-list" class="provider-list"></div>
+          <div id="memory-detail" class="memory-detail hidden"><pre></pre></div>
+          <div class="form-grid">
+            <label>标识<input id="mem-name" placeholder="deploy-workflow" /></label>
+            <label>摘要<input id="mem-desc" placeholder="一句话说明" /></label>
+            <label class="span2">内容<textarea id="mem-body" rows="4" placeholder="记忆正文(markdown), 可用 [[其他记忆名]] 引用"></textarea></label>
+          </div>
+          <div class="form-actions">
+            <button id="mem-save" class="btn primary">保存</button>
+            <span id="mem-msg" class="test-result"></span>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Hooks modal ============ -->
+  <div id="hooks-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>⛓ Hooks</h2>
+        <button id="btn-close-hooks" class="icon-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="about">钩子脚本在工具调用前后等生命周期点执行。位置: <code>~/.openzcode/hooks/</code>、项目 <code>.openzcode/hooks/</code>、插件 hooks/。文件首行注释 <code># openzcode-hook: PreToolUse bash</code> 绑定事件与工具; PreToolUse 可输出 {"deny":true,"reason":"..."} 拦截。</p>
+        <div id="hooks-list" class="provider-list"></div>
       </div>
     </div>
   </div>

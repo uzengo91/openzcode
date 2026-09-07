@@ -14,6 +14,56 @@ function truncateForEvent(text, n = 4000) {
   return text.length > n ? text.slice(0, n) + `…[截断,共${text.length}字符]` : text;
 }
 
+const WRITE_CLASS_TOOLS = new Set(["bash", "write_file", "edit_file", "todo_write", "computer_click", "computer_type", "computer_key", "computer_scroll", "browser_click", "browser_type", "browser_evaluate", "Agent", "CronCreate", "CronUpdate", "CronDelete"]);
+// per-session plan-mode state persisted across turns (session id → {active, text})
+const sessionPlanState = new Map();
+
+/** plan-mode controls passed to tools via extensions */
+function createPlanMode(storage) {
+  return {
+    forSession(sessionId) {
+      if (!sessionPlanState.has(sessionId)) sessionPlanState.set(sessionId, { active: false, text: "" });
+      const st = sessionPlanState.get(sessionId);
+      return {
+        isActive: () => st.active,
+        async enter() {
+          st.active = true;
+          st.text = "";
+          return { ok: true, output: "已进入计划模式(plan): 只能读取/搜索/产出计划, 写类工具被拒绝。调研充分后用 ExitPlanMode 提交计划。" };
+        },
+        async exit(planText) {
+          st.text = planText;
+          // approval via permission channel: approve(id) resolves {allow}
+          return new Promise((resolve) => {
+            const id = "plan_" + Math.random().toString(36).slice(2, 10);
+            st.pendingApproval = { id, planText, resolve };
+            // emit is bound later via st.emit (set by the server adapter)
+            if (st.emit) st.emit({ type: "plan_request", id, plan: planText });
+            else resolve({ ok: false, output: "当前环境不支持计划审批(非交互模式), 请直接执行或切换权限模式。" });
+            setTimeout(() => {
+              if (st.pendingApproval) { st.pendingApproval = null; resolve({ ok: false, output: "计划审批超时未响应, 仍处于计划模式。" }); }
+            }, 600000);
+          });
+        },
+        approve(id, allow) {
+          const p = st.pendingApproval;
+          if (!p || p.id !== id) return false;
+          st.pendingApproval = null;
+          st.active = !allow;
+          p.resolve({
+            ok: true,
+            output: allow
+              ? "用户已批准计划。已退出计划模式, 现在开始按计划执行。"
+              : "用户拒绝了该计划。仍处于计划模式, 请根据反馈调整计划后重新 ExitPlanMode。",
+          });
+          return true;
+        },
+        setEmit(fn) { st.emit = fn; },
+      };
+    },
+  };
+}
+
 async function runAgentTurn({
   session,
   userText,
@@ -23,13 +73,19 @@ async function runAgentTurn({
   emit,
   permissionHandler,
   signal,
-  extensions = {}, // { mcpManager, skills }
+  extensions = {}, // { mcpManager, skills, memory, hooks, planMode, askUser, subagents, automations }
 }) {
   const sessionId = session.id;
   const workspace = session.workspace;
   const maxIterations = config.maxIterations || 40;
 
   emit({ type: "turn_started" });
+
+  // auto-compact when context is over budget (before building the request)
+  try {
+    const { maybeAutoCompact } = require("../compact");
+    await maybeAutoCompact({ storage, sessionId, provider, config, emit });
+  } catch {}
 
   // 1. persist user message + auto title
   const userMsg = storage.appendMessage(sessionId, "user", [{ type: "text", text: userText }]);
@@ -48,11 +104,18 @@ async function runAgentTurn({
     workspace,
     toolNames: tools.map((t) => t.name),
     skillsSection: extensions.skills ? extensions.skills.promptSection() : "",
+    memorySection: extensions.memory ? extensions.memory.promptSection(workspace) : "",
     hasMcp: mcpDefs.length > 0,
   });
   const history = storage.getMessages(sessionId).map((m) => ({ role: m.role, parts: m.parts }));
 
   const alwaysAllowed = new Set();
+  // plan-mode state persists across turns of the same session; fresh plan run
+  // (permissionMode==="plan" not used by app UI — mode via tools) seeds from config
+  if (!sessionPlanState.has(sessionId)) {
+    sessionPlanState.set(sessionId, { active: config.permissionMode === "plan", text: "" });
+  }
+  const planBlock = sessionPlanState.get(sessionId);
   let totalUsage = { promptTokens: 0, completionTokens: 0 };
   let iterations = 0;
   const turnStartedAt = Date.now();
@@ -156,9 +219,35 @@ async function runAgentTurn({
         let result;
         let denied = false;
 
+        /* ---- plan mode: deny write-class tools until plan approved ---- */
+        if (planBlock.active && WRITE_CLASS_TOOLS.has(tc.name)) {
+          result = { ok: false, output: "当前处于计划模式(plan): 只能读取和产出计划, 不能执行写操作。请用 ExitPlanMode 提交计划等待用户批准, 或提示用户切换权限模式。" };
+          denied = true;
+        }
+
+        // hooks PreToolUse: allow deny / input rewrite (never fails the turn)
+        if (!denied && extensions.hooks) {
+          try {
+            const hookResult = await extensions.hooks.preToolUse(tc.name, tc.input ?? {});
+            if (hookResult.deny) {
+              denied = true;
+              result = { ok: false, output: `被 hook 拦截: ${hookResult.reason || "(无理由)"}` };
+            } else if (hookResult.input !== (tc.input ?? {})) {
+              tc.input = hookResult.input;
+            }
+          } catch {}
+        }
+
         emit({ type: "tool_start", id: tc.id, name: tc.name, input: tc.input });
 
-        if (!tool) {
+        if (denied) {
+          // denial from plan mode / hooks (set before tool lookup): still emit
+          // tool_end so the UI and tests observe what happened
+          emit({
+            type: "tool_end", id: tc.id, name: tc.name, ok: false, ms: 0,
+            output: truncateForEvent(result.output, 2500),
+          });
+        } else if (!tool) {
           result = { ok: false, output: `未知工具: ${tc.name}` };
         } else {
           const wantsApproval = tool.danger && config.permissionMode === "ask" && !alwaysAllowed.has(tc.name);
@@ -182,6 +271,14 @@ async function runAgentTurn({
             result = { ok: false, output: "用户拒绝了此操作。请调整方案或向用户解释后重试。" };
           } else if (denied) {
             // keep the more specific denial reason already set
+          }
+          if (denied) {
+            // all denial paths (plan mode / hook / permission / non-interactive)
+            // surface a tool_end so UI and tests can observe the denial
+            emit({
+              type: "tool_end", id: tc.id, name: tc.name, ok: false, ms: 0,
+              output: truncateForEvent(result.output, 2500),
+            });
           } else {
             const t0 = Date.now();
             try {
@@ -189,6 +286,11 @@ async function runAgentTurn({
                 workspace, sessionId, storage, config, emit, signal,
                 skills: extensions.skills,
                 automations: extensions.automations,
+                memory: extensions.memory,
+                hooks: extensions.hooks,
+                planMode: extensions.planMode ? extensions.planMode.forSession(sessionId) : null,
+                askUser: extensions.askUser ? (q) => extensions.askUser(sessionId, q) : null,
+                subagents: extensions.subagents,
               });
             } catch (err) {
               result = { ok: false, output: `工具执行异常: ${err.message}` };
@@ -200,6 +302,9 @@ async function runAgentTurn({
               output: truncateForEvent(result.output, 2500),
               hasImage: !!result.image,
             });
+            if (extensions.hooks) {
+              try { await extensions.hooks.postToolUse(tc.name, tc.input, result); } catch {}
+            }
           }
         }
 
@@ -211,6 +316,8 @@ async function runAgentTurn({
     }
 
     emit({ type: "turn_done", ok: true, iterations, usage: totalUsage, ms: Date.now() - turnStartedAt });
+    // clean up per-turn state that must not leak into finished sessions
+    if (sessionPlanState.get(sessionId) && !sessionPlanState.get(sessionId).active) sessionPlanState.delete(sessionId);
     return { ok: true, iterations, usage: totalUsage };
   } catch (err) {
     const aborted = err?.name === "AbortError" || signal?.aborted;
@@ -219,4 +326,4 @@ async function runAgentTurn({
   }
 }
 
-module.exports = { runAgentTurn };
+module.exports = { runAgentTurn, createPlanMode, sessionPlanState, WRITE_CLASS_TOOLS };

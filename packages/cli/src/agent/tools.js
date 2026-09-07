@@ -297,6 +297,84 @@ async function runWebFetch(input, ctx) {
   }
 }
 
+/* ------------------------------ web search ------------------------------ */
+
+function decodeEntities(s) {
+  return s
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
+}
+
+function stripTags(s) {
+  return decodeEntities(String(s).replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+}
+
+async function runWebSearch(input) {
+  const query = String(input.query ?? "").trim();
+  if (!query) return errResult("query 不能为空");
+  const engine = input.engine === "duckduckgo" ? "duckduckgo" : "bing";
+  const count = Math.min(Math.max(Number(input.count) || 6, 1), 10);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(new Error("搜索超时(20s)")), 20000);
+  try {
+    let html;
+    if (engine === "bing") {
+      const res = await fetch(`https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${count + 4}&setmkt=en-US&setlang=en`, {
+        signal: ctrl.signal,
+        headers: {
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+          "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        },
+      });
+      if (!res.ok) return errResult(`Bing HTTP ${res.status}`);
+      html = await res.text();
+    } else {
+      const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+        signal: ctrl.signal,
+        headers: { "user-agent": "Mozilla/5.0 (OpenZCode)" },
+      });
+      if (!res.ok) return errResult(`DuckDuckGo HTTP ${res.status}`);
+      html = await res.text();
+    }
+
+    const results = [];
+    if (engine === "bing") {
+      const itemRe = /<li class="b_algo"[\s\S]*?<\/li>/g;
+      let m;
+      while ((m = itemRe.exec(html)) && results.length < count) {
+        const item = m[0];
+        const urlM = /<h2[^>]*><a[^>]+href="(https?:\/\/[^"]+)"/.exec(item);
+        if (!urlM) continue;
+        const title = stripTags(/<h2[^>]*>([\s\S]*?)<\/h2>/.exec(item)?.[1] || "");
+        const snippet = stripTags(/<p[^>]*>([\s\S]*?)<\/p>/.exec(item)?.[1] || /<div class="b_caption"[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/.exec(item)?.[1] || "");
+        results.push({ title, url: decodeEntities(urlM[1]), snippet: snippet.slice(0, 300) });
+      }
+    } else {
+      const itemRe = /<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+      const snipRe = /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+      const snippets = [];
+      let sm;
+      while ((sm = snipRe.exec(html))) snippets.push(stripTags(sm[1]));
+      let im, i = 0;
+      while ((im = itemRe.exec(html)) && results.length < count) {
+        let url = decodeEntities(im[1]);
+        const uddg = /uddg=([^&]+)/.exec(url);
+        if (uddg) url = decodeURIComponent(uddg[1]);
+        results.push({ title: stripTags(im[2]), url, snippet: (snippets[i] || "").slice(0, 300) });
+        i++;
+      }
+    }
+
+    if (!results.length) return errResult(`搜索无结果 (${engine}) — 可尝试换 engine 或调整关键词`);
+    const out = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join("\n");
+    return okResult(`[${engine} 搜索: ${query}] 共 ${results.length} 条\n\n${out}`);
+  } catch (e) {
+    return errResult(`搜索失败: ${e.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /* ------------------------------ computer use / browser ------------------------------ */
 
 let sharedBrowser = null;
@@ -617,6 +695,20 @@ const TOOLS = [
     run: runWebFetch,
   },
   {
+    name: "web_search",
+    description: "网页搜索: 返回搜索结果的标题/URL/摘要列表(默认 Bing 国际版, 可选 duckduckgo)。时效性问题优先用本工具, 再用 web_fetch 打开具体结果。",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "搜索关键词" },
+        engine: { type: "string", enum: ["bing", "duckduckgo"], description: "搜索引擎, 默认 bing" },
+        count: { type: "number", description: "结果数量上限, 默认 6, 最大 10" },
+      },
+      required: ["query"],
+    },
+    run: runWebSearch,
+  },
+  {
     name: "skill",
     description: "加载一个技能(Skill)的完整说明到上下文。当用户任务匹配系统提示中列出的技能描述时,先调用本工具,再按技能说明执行。可用 name 见系统提示的技能清单。",
     parameters: {
@@ -703,18 +795,151 @@ const TOOLS = [
       return Promise.resolve(ctx.automations.deleteFromTool(String(input.id || "")));
     },
   },
+  {
+    name: "AskUserQuestion",
+    description: "向用户提出一个结构化问题(2-4 个选项)。遇到需求歧义、方案选择时使用; 用户的选择会作为工具结果返回。",
+    parameters: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "完整的问题" },
+        header: { type: "string", description: "简短主题标签(≤12字符)" },
+        options: {
+          type: "array",
+          description: "2-4 个选项",
+          items: {
+            type: "object",
+            properties: {
+              label: { type: "string", description: "选项标签(1-5 词)" },
+              description: { type: "string", description: "该选项的含义/影响" },
+            },
+            required: ["label"],
+          },
+        },
+        multiSelect: { type: "boolean", description: "是否允许多选" },
+      },
+      required: ["question", "options"],
+    },
+    run: (input, ctx) => {
+      const options = (Array.isArray(input.options) ? input.options : []).map((o) => String(o.label ?? o)).filter(Boolean);
+      if (options.length < 2 || options.length > 4) return Promise.resolve(errResult("options 需要 2-4 个"));
+      if (!ctx.askUser) return Promise.resolve(errResult("当前环境不支持交互提问(非交互模式)"));
+      return ctx.askUser({
+        question: String(input.question ?? ""),
+        header: String(input.header ?? "").slice(0, 12),
+        options,
+        multiSelect: !!input.multiSelect,
+      });
+    },
+  },
+  {
+    name: "EnterPlanMode",
+    description: "进入计划模式: 之后只能读取/搜索/产出计划, 写类工具(bash/写文件/编辑等)会被拒绝。先充分调研, 再用 ExitPlanMode 提交完整计划等待用户批准。",
+    parameters: { type: "object", properties: {} },
+    run: (input, ctx) => {
+      if (!ctx.planMode) return Promise.resolve(errResult("计划模式不可用"));
+      return ctx.planMode.enter();
+    },
+  },
+  {
+    name: "ExitPlanMode",
+    description: "提交计划并请求用户批准。plan 参数为完整的实施计划(markdown)。批准后自动退出计划模式并开始执行; 拒绝则继续留在计划模式调整方案。",
+    parameters: {
+      type: "object",
+      properties: {
+        plan: { type: "string", description: "完整实施计划(markdown), 用户将逐条审阅" },
+      },
+      required: ["plan"],
+    },
+    run: (input, ctx) => {
+      if (!ctx.planMode) return Promise.resolve(errResult("计划模式不可用"));
+      return ctx.planMode.exit(String(input.plan ?? ""));
+    },
+  },
+  {
+    name: "Agent",
+    description: "派发一个子代理在独立上下文中执行复杂多步任务, 只把最终结论带回主会话(不占用主上下文)。subagent_type: general-purpose(全部工具) / Explore(只读探索, 无写权限)。适合: 大范围搜索、独立调研、批量重复工作。",
+    parameters: {
+      type: "object",
+      properties: {
+        description: { type: "string", description: "任务简述(3-5词)" },
+        prompt: { type: "string", description: "给子代理的完整任务描述(必须自包含)" },
+        subagent_type: { type: "string", enum: ["general-purpose", "Explore"], description: "子代理类型, 默认 general-purpose" },
+      },
+      required: ["description", "prompt"],
+    },
+    danger: true,
+    run: (input, ctx) => {
+      if (!ctx.subagents) return Promise.resolve(errResult("子代理系统不可用"));
+      return ctx.subagents.spawn({
+        description: String(input.description ?? "子任务"),
+        prompt: String(input.prompt ?? ""),
+        type: input.subagent_type === "Explore" ? "Explore" : "general-purpose",
+      });
+    },
+  },
   ...COMPUTER_TOOLS,
   ...BROWSER_TOOLS,
+  {
+    name: "memory_write",
+    description: "把一条长期记忆写入当前工作区的记忆库(跨会话持久)。适合: 用户偏好、项目约定、重要结论。name 为短横线小写标识。",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "记忆标识, 如 deploy-workflow" },
+        body: { type: "string", description: "记忆正文(markdown), 可用 [[其他记忆名]] 链接" },
+        description: { type: "string", description: "一句话摘要(索引用)" },
+      },
+      required: ["name", "body"],
+    },
+    run: (input, ctx) => {
+      if (!ctx.memory) return Promise.resolve(errResult("记忆系统不可用"));
+      return Promise.resolve(ctx.memory.write(ctx.workspace, String(input.name || ""), String(input.body ?? ""), String(input.description ?? "")));
+    },
+  },
+  {
+    name: "memory_read",
+    description: "读取一条长期记忆(含 [[链接]] 的相关记忆列表)。name 不确定时可传 list 查看全部。",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "记忆标识, 或 \"list\" 列出全部" },
+      },
+      required: ["name"],
+    },
+    run: (input, ctx) => {
+      if (!ctx.memory) return Promise.resolve(errResult("记忆系统不可用"));
+      const name = String(input.name || "").trim();
+      if (name === "list" || name === "") {
+        const items = ctx.memory.listIndex(ctx.workspace);
+        return Promise.resolve({ ok: true, output: items.length ? items.map((i) => `- ${i.name}: ${i.description}`).join("\n") : "(记忆库为空 — 用 memory_write 写入)" });
+      }
+      return Promise.resolve(ctx.memory.read(ctx.workspace, name));
+    },
+  },
 ];
 
 const ALL_TOOLS = TOOLS;
+// Explore-type subagents temporarily swap the visible tool table
+// (see src/subagent.js); null restores the full table.
+let toolTableOverride = null;
+
+function __setToolTableForSubagent(defs) {
+  toolTableOverride = defs;
+}
 const TOOL_MAP = new Map(ALL_TOOLS.map((t) => [t.name, t]));
 
-function getTool(name) { return TOOL_MAP.get(name) || null; }
+function getTool(name) {
+  if (toolTableOverride) {
+    const t = toolTableOverride.find((d) => d.name === name);
+    return t || null;
+  }
+  return TOOL_MAP.get(name) || null;
+}
 function toolDefinitions() {
-  return ALL_TOOLS.map(({ name, description, parameters, danger }) => ({ name, description, parameters, danger: !!danger }));
+  const table = toolTableOverride || ALL_TOOLS;
+  return table.map(({ name, description, parameters, danger }) => ({ name, description, parameters, danger: !!danger }));
 }
 
 function closeBrowser() { sharedBrowser && sharedBrowser.close(); }
 
-module.exports = { toolDefinitions, getTool, closeBrowser, resolveInWorkspace, truncate, okResult, errResult, crypto };
+module.exports = { toolDefinitions, getTool, __setToolTableForSubagent, closeBrowser, resolveInWorkspace, truncate, okResult, errResult, crypto };

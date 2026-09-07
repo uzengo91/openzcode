@@ -26,6 +26,10 @@ const { McpManager, writeUserMcp, readMcpFile, userMcpPath } = require("../mcp/m
 const automations = require("../automations");
 const marketplace = require("../marketplace");
 const computer = require("../computer");
+const memory = require("../memory");
+const { loadHooks } = require("../hooks");
+const { createPlanMode } = require("../agent/loop");
+const { createSubagents } = require("../subagent");
 const { closeBrowser } = require("../agent/tools");
 const { BrowserManager } = require("../browser");
 const { VERSION, PROTOCOL_VERSION } = require("../version");
@@ -57,13 +61,48 @@ function runAppServer() {
     else if (e.type === "log") { if (!rpc.isClosed()) rpc.notify("engine/log", { message: e.message }); }
   });
 
+  let hooksRuntime = null;
   function refreshExtensions() {
     currentPlugins = pluginRegistry.discover({ workspace: defaultWorkspace });
     skills.setContext({ workspace: defaultWorkspace, plugins: currentPlugins });
     mcp.setContext({ workspace: defaultWorkspace, plugins: currentPlugins });
+    hooksRuntime = loadHooks({ workspace: defaultWorkspace, plugins: currentPlugins });
     return mcp.load();
   }
   const extensionsReady = refreshExtensions().catch(() => {});
+
+  /* ------------- plan mode / ask-user / subagents ------------- */
+
+
+  const planMode = createPlanMode(storage);
+  const planEventFor = (sessionId) => (event) => emitEvent(sessionId, event);
+
+  // sessionId → pending question {resolve}
+  const pendingQuestions = new Map();
+
+  function askUser(sessionId, q) {
+    return new Promise((resolve) => {
+      const id = "q_" + Math.random().toString(36).slice(2, 10);
+      pendingQuestions.set(id, { sessionId, resolve });
+      emitEvent(sessionId, { type: "question_request", id, ...q });
+      setTimeout(() => {
+        if (pendingQuestions.get(id)?.sessionId === sessionId) {
+          pendingQuestions.delete(id);
+          resolve({ ok: false, output: "提问超时未回答。请基于最可能的假设继续, 并说明你的假设。" });
+        }
+      }, 600000);
+    });
+  }
+
+  const subagents = createSubagents({
+    storage,
+    workspace: defaultWorkspace,
+    getProvider: () => configStore.getDefaultProvider(),
+    getConfig: () => ({ ...configStore.load() }),
+    mcpManager: mcp,
+    skills,
+    emit: (sessionId, event) => emitEvent(sessionId, event),
+  });
 
   /* ------------- turn launcher (shared by RPC + scheduler) ------------- */
 
@@ -85,6 +124,9 @@ function runAppServer() {
     t.abort = new AbortController();
     const abort = t.abort;
 
+    const pm = planMode.forSession(sessionId);
+    pm.setEmit(planEventFor(sessionId));
+
     // runAgentTurn resolves (never rejects) with {ok,...}; progress flows as session/event
     const done = runAgentTurn({
       session,
@@ -103,7 +145,23 @@ function runAppServer() {
           signal?.addEventListener("abort", onAbort, { once: true });
         }),
       signal: abort.signal,
-      extensions: { mcpManager: mcp, skills, automations: automationService },
+      extensions: {
+        mcpManager: mcp,
+        skills,
+        automations: automationService,
+        memory,
+        hooks: hooksRuntime,
+        planMode: { forSession: () => pm },
+        askUser: (sid, q) => askUser(sid, q),
+        subagents: {
+          spawn: (task) => subagents.spawn({
+            ...task,
+            emitParent: (event) => emitEvent(sessionId, event),
+            provider,
+            config: cfg,
+          }),
+        },
+      },
     });
     done.finally(() => {
       t.running = false;
@@ -221,6 +279,37 @@ function runAppServer() {
     return { deleted: true };
   }));
 
+  rpc.on("session/fork", guard((p) => {
+    const src = storage.getSession(p.sessionId);
+    if (!src) throw new Error(`会话不存在: ${p.sessionId}`);
+    const msgs = storage.getMessages(p.sessionId);
+    const forked = storage.createSession({ workspace: src.workspace, title: (p.title || `fork: ${src.title}`).slice(0, 60), parentId: src.id });
+    for (const m of msgs) storage.appendMessage(forked.id, m.role, m.parts);
+    return publicSession(forked);
+  }));
+
+  rpc.on("session/inputHistory", guard((p) => {
+    const msgs = storage.getMessages(p.sessionId || "");
+    if (p.sessionId && msgs.length) {
+      const seen = new Set(); const out = [];
+      for (const m of msgs) {
+        if (m.role !== "user") continue;
+        const t = (m.parts || []).map((x) => x.text || "").join("").trim();
+        if (t && !seen.has(t)) { seen.add(t); out.push(t); }
+      }
+      return { history: out.reverse().slice(0, 100) };
+    }
+    // global: recent first user message of each session
+    const sessions = storage.listSessions({}).slice(0, 30);
+    const out = [];
+    for (const s of sessions) {
+      const first = storage.getMessages(s.id).find((m) => m.role === "user");
+      const t = first ? (first.parts || []).map((x) => x.text || "").join("").trim() : "";
+      if (t && !out.includes(t)) out.push(t);
+    }
+    return { history: out.slice(0, 100) };
+  }));
+
   rpc.on("session/send", guard((p) => {
     const provider = p.providerIdOrName ? configStore.getProvider(p.providerIdOrName) : configStore.getDefaultProvider();
     // fire-and-forget: the turn streams out as session/event; automation fire() awaits its own copy
@@ -261,6 +350,26 @@ function runAppServer() {
     return { resolved: true };
   }));
 
+  rpc.on("session/approvePlan", guard((p) => {
+    const pm = planMode.forSession(p.sessionId);
+    const ok = pm.approve(p.id, !!p.allow);
+    emitEvent(p.sessionId, { type: "plan_resolved", id: p.id, allow: !!p.allow });
+    return { resolved: ok };
+  }));
+
+  rpc.on("session/answer", guard((p) => {
+    const q = pendingQuestions.get(p.id);
+    if (!q) return { resolved: false };
+    pendingQuestions.delete(p.id);
+    const chosen = Array.isArray(p.answers) && p.answers.length ? p.answers : [p.answer].filter(Boolean);
+    q.resolve({
+      ok: true,
+      output: `用户选择了: ${chosen.join(", ") || "(其他/自定义回答)"}`,
+    });
+    emitEvent(q.sessionId, { type: "question_resolved", id: p.id, answers: chosen });
+    return { resolved: true };
+  }));
+
   /* ------------- extensions RPC: mcp / skills / commands / plugins ------------- */
 
   rpc.on("mcp/list", guard(() => mcp.list()));
@@ -290,6 +399,11 @@ function runAppServer() {
   rpc.on("mcp/call", guard((p) => mcp.callDirect(String(p.server), String(p.tool), p.args || {})));
 
   rpc.on("skills/list", guard(() => skills.list()));
+
+  rpc.on("memory/list", guard(() => memory.listIndex(defaultWorkspace)));
+  rpc.on("memory/read", guard((p) => memory.read(defaultWorkspace, String(p.name || ""))));
+  rpc.on("memory/write", guard((p) => memory.write(defaultWorkspace, String(p.name || ""), String(p.body || ""), String(p.description || ""))));
+  rpc.on("hooks/list", guard((p) => hooksRuntime ? hooksRuntime.list() : []));
 
   rpc.on("commands/list", guard(() => commands.list({ workspace: defaultWorkspace, plugins: currentPlugins })));
 
