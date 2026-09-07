@@ -465,6 +465,8 @@ fn config_summary_entries(
                 .map(|summary| summary.to_string())
                 .unwrap_or_else(|| "none".to_string()),
         ));
+    } else if config.model_provider.wire_api == WireApi::Chat {
+        entries.push(("wire api", "chat".to_string()));
     }
     entries.push((
         "session id",

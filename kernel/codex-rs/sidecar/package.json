@@ -1,0 +1,10 @@
+{
+  "name": "@openzcode/sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenZCode sidecar services — automations scheduler, memory, computer & browser MCP servers bridging JS assets onto the Rust kernel",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "^1.50.0"
+  }
+}
