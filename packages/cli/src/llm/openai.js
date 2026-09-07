@@ -151,10 +151,22 @@ async function streamOpenAI({ provider, system, messages, tools, signal, onDelta
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     const push = makeSseParser(handleData);
+    // idle timeout: abort if no bytes arrive for a while (server accepted the
+    // connection but stalls) — prevents turns hanging forever
+    const idleMs = Number(process.env.OPENZCODE_STREAM_IDLE_TIMEOUT_MS) || 90000;
     for (;;) {
-      const { done, value } = await reader.read();
+      const idle = setTimeout(() => reader.cancel(new Error(`流空闲超时 (${idleMs}ms 无数据)`)), idleMs);
+      let done, chunk;
+      try {
+        ({ done, value: chunk } = await reader.read());
+      } catch (e) {
+        clearTimeout(idle);
+        if (textChunks.length || toolAcc.size) break; // got partial data, treat as end
+        throw new Error(`模型流中断: ${e.message || e}`);
+      }
+      clearTimeout(idle);
       if (done) break;
-      push(decoder.decode(value, { stream: true }));
+      push(decoder.decode(chunk, { stream: true }));
     }
     push(decoder.decode());
   } else {

@@ -73,19 +73,34 @@ async function runAgentTurn({
       let partialText = "";
       let response;
       try {
-        response = await chatStream({
-          provider,
-          system,
-          messages: history,
-          tools,
-          signal,
-          onDelta: (d) => {
-            if (d.type === "text") {
-              partialText += d.text;
-              emit({ type: "text_delta", text: d.text });
+        // one automatic retry for transient stream failures (idle timeout,
+        // reset sockets); aborts propagate immediately
+        for (let attempt = 0; ; attempt++) {
+          try {
+            response = await chatStream({
+              provider,
+              system,
+              messages: history,
+              tools,
+              signal,
+              onDelta: (d) => {
+                if (d.type === "text") {
+                  partialText += d.text;
+                  emit({ type: "text_delta", text: d.text });
+                }
+              },
+            });
+            break;
+          } catch (err) {
+            if (signal?.aborted) throw err;
+            const retryable = /空闲超时|流中断|fetch failed|ECONNRESET|socket hang up|network/i.test(err.message || "");
+            if (attempt === 0 && retryable && !partialText) {
+              appendRollout(sessionId, { type: "model_retry", iteration: iter, error: err.message });
+              continue;
             }
-          },
-        });
+            throw err;
+          }
+        }
       } catch (err) {
         if (signal?.aborted) {
           if (partialText) {

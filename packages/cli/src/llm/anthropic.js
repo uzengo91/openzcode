@@ -97,9 +97,19 @@ async function streamAnthropic({ provider, system, messages, tools, signal, onDe
   let buf = "";
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
+  const idleMs = Number(process.env.OPENZCODE_STREAM_IDLE_TIMEOUT_MS) || 90000;
 
   for (;;) {
-    const { done, value } = await reader.read();
+    const idle = setTimeout(() => reader.cancel(new Error(`流空闲超时 (${idleMs}ms 无数据)`)), idleMs);
+    let value, done;
+    try {
+      ({ done, value } = await reader.read());
+    } catch (e) {
+      clearTimeout(idle);
+      if (textChunks.length) break;
+      throw new Error(`模型流中断: ${e.message || e}`);
+    }
+    clearTimeout(idle);
     if (done) break;
     buf += decoder.decode(value, { stream: true });
     let idx;
