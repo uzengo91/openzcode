@@ -1,6 +1,6 @@
 {
   "name": "@openzcode/cli",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "OpenZCode CLI engine — agent loop, tools, storage, app-server (stdio JSON-RPC), TUI",
   "bin": {
@@ -12,5 +12,8 @@
   "devDependencies": {
     "esbuild": "^0.24.0"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "dependencies": {
+    "playwright-core": "^1.50.0"
+  }
 }

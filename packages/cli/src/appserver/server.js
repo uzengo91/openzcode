@@ -25,6 +25,9 @@ const commands = require("../commands");
 const { McpManager, writeUserMcp, readMcpFile, userMcpPath } = require("../mcp/manager");
 const automations = require("../automations");
 const marketplace = require("../marketplace");
+const computer = require("../computer");
+const { closeBrowser } = require("../agent/tools");
+const { BrowserManager } = require("../browser");
 const { VERSION, PROTOCOL_VERSION } = require("../version");
 
 function resolveWorkspace(p) {
@@ -331,11 +334,18 @@ function runAppServer() {
   rpc.on("marketplace/addSource", guard((p) => { marketplace.addSource({ name: p.name, url: p.url, path: p.path }); return marketplace.sources(); }));
   rpc.on("marketplace/removeSource", guard((p) => marketplace.removeSource(p.name)));
 
+  /* ------------- browser / computer status ------------- */
+
+  const appBrowser = new BrowserManager();
+  rpc.on("browser/status", guard(() => appBrowser.status()));
+  rpc.on("computer/status", guard(() => computer.computerStatus()));
+
   /* ------------- shutdown ------------- */
 
   function shutdown() {
     for (const [, t] of turns) { try { t.abort?.abort(new Error("app-server 关闭")); } catch {} }
     try { mcp.close(); } catch {}
+    try { closeBrowser(); } catch {}
     try { storage.close(); } catch {}
     try { process.exit(0); } catch {}
   }

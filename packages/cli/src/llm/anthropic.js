@@ -4,17 +4,29 @@
 
 const { joinUrl, parseError } = require("./openai");
 
-function toAnthropicMessages(messages) {
+function toAnthropicMessages(messages, { imageWindow = 3 } = {}) {
+  const lastImgIdx = (() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if ((messages[i].parts || []).some((p) => p.type === "image") || (messages[i].parts || []).some((p) => (p.images || []).length)) return i;
+    }
+    return -1;
+  })();
+  const keepFrom = lastImgIdx === -1 ? messages.length : Math.max(0, messages.length - imageWindow);
   const out = [];
   const pushUser = (blocks) => {
     const last = out[out.length - 1];
     if (last && last.role === "user") last.content.push(...blocks);
     else out.push({ role: "user", content: blocks });
   };
-  for (const m of messages) {
+  messages.forEach((m, i) => {
+    const keep = i >= keepFrom;
     if (m.role === "user") {
-      const text = (m.parts || []).filter((p) => p.type === "text").map((p) => p.text).join("\n");
-      if (text) pushUser([{ type: "text", text }]);
+      const blocks = [];
+      for (const p of m.parts || []) {
+        if (p.type === "text" && p.text) blocks.push({ type: "text", text: p.text });
+        else if (p.type === "image" && keep) blocks.push({ type: "image", source: { type: "base64", media_type: p.mime || "image/png", data: p.data } });
+      }
+      if (blocks.length) pushUser(blocks);
     } else if (m.role === "assistant") {
       const content = [];
       for (const p of m.parts || []) {
@@ -26,17 +38,20 @@ function toAnthropicMessages(messages) {
       const blocks = [];
       for (const p of m.parts || []) {
         if (p.type === "tool_result") {
-          blocks.push({
-            type: "tool_result",
-            tool_use_id: p.tool_use_id,
-            content: typeof p.content === "string" ? [{ type: "text", text: p.content }] : p.content,
-            is_error: !!p.is_error,
-          });
+          const inner = [];
+          const txt = typeof p.content === "string" ? p.content : JSON.stringify(p.content);
+          if (txt) inner.push({ type: "text", text: txt });
+          for (const img of p.images || []) {
+            inner.push(keep
+              ? { type: "image", source: { type: "base64", media_type: img.mime || "image/png", data: img.data } }
+              : { type: "text", text: "[截图已省略]" });
+          }
+          blocks.push({ type: "tool_result", tool_use_id: p.tool_use_id, content: inner, is_error: !!p.is_error });
         }
       }
       if (blocks.length) pushUser(blocks);
     }
-  }
+  });
   return out;
 }
 

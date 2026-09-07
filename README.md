@@ -124,6 +124,22 @@ npm run package          # 打 release zip
 - `test:artifact` 是最终验收门：用**构建产物**（`OPENZCODE_BUNDLE` 可指向 release 解压出的 openzcode.cjs）驱动 agent，把**本仓库**作为工作区 —— 模型要读取真实源码并写入 `.oz-itest/`（gitignored），断言逐字节与仓库真值一致；同时验证 **MCP 工具调用**（引擎加载配置的 MCP server，LLM 决策调用 `mcp__calc__add` 并核验结果）。
 - `test:ci` 覆盖 MCP 双 transport（stdio + Streamable HTTP 的握手/tools list/tools call）、技能发现与 frontmatter、命令展开（$ARGUMENTS/$1）、插件安装/移除/启停 —— 全程无 LLM、无外网。
 
+## 电脑操作 与 浏览器控制
+
+**电脑操作**（零原生依赖，按平台自动选择后端，危险操作需审批）：
+`computer_screenshot`（截图作为图像回传给模型）、`computer_click`（left/right/double）、`computer_type`、`computer_key`（`cmd+c`/`ctrl+shift+t`/`Return`…）、`computer_scroll`。
+
+| 平台 | 截屏 | 鼠标/键盘 |
+|---|---|---|
+| macOS | `screencapture` | osascript（键盘/左键），装 [cliclick](https://github.com/BlueM/cliclick) 后支持右键/双击 |
+| Windows | PowerShell + GDI+ | PowerShell SendInput/SendKeys（完整支持） |
+| Linux | gnome-screenshot / scrot / import | xdotool（X11） |
+
+**浏览器控制**（playwright-core，可选依赖；优先复用本机 Chrome/Edge，无需下载浏览器）：
+`browser_open` / `browser_navigate` / `browser_snapshot`（ARIA 快照，`[ref=eN]` 引用）/ `browser_click` / `browser_type` / `browser_evaluate` / `browser_screenshot` / `browser_close`。
+快照引用是点击与输入的唯一事实来源。截图同样作为图像回传模型。设置环境变量 `OPENZCODE_BROWSER_HEADLESS=0` 可有头运行。
+浏览器缺失时给出明确安装提示（`npm i playwright-core` + Chrome/Edge 或 `npx playwright install chromium`）。
+
 ## 自动化（定时任务）
 
 引擎内建调度器（默认 30s tick），自动化持久化在 SQLite，触发时自动开新会话、以设定权限模式无人值守执行，并记录每次运行历史。

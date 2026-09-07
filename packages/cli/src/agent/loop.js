@@ -180,16 +180,17 @@ async function runAgentTurn({
             }
             const ms = Date.now() - t0;
             storage.recordToolUse({ sessionId, tool: tc.name, ok: result.ok, durationMs: ms });
-            emit({ type: "tool_end", id: tc.id, name: tc.name, ok: result.ok, ms, output: truncateForEvent(result.output, 2500) });
+            emit({
+              type: "tool_end", id: tc.id, name: tc.name, ok: result.ok, ms,
+              output: truncateForEvent(result.output, 2500),
+              hasImage: !!result.image,
+            });
           }
         }
 
-        const resultMsg = storage.appendMessage(sessionId, "tool", [{
-          type: "tool_result",
-          tool_use_id: tc.id,
-          content: result.output,
-          is_error: !result.ok,
-        }]);
+        const resultParts = [{ type: "tool_result", tool_use_id: tc.id, content: result.output, is_error: !result.ok }];
+        if (result.image) resultParts.push({ type: "image", mime: result.image.mime, data: result.image.data });
+        const resultMsg = storage.appendMessage(sessionId, "tool", resultParts);
         history.push({ role: "tool", parts: resultMsg.parts });
       }
     }

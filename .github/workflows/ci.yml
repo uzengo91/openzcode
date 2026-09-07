@@ -7,7 +7,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,11 +36,11 @@ jobs:
           OPENZCODE_TEST_API_KEY: ${{ secrets.OPENZCODE_TEST_API_KEY }}
           OPENZCODE_TEST_BASE_URL: ${{ secrets.OPENZCODE_TEST_BASE_URL }}
           OPENZCODE_TEST_MODEL: ${{ secrets.OPENZCODE_TEST_MODEL }}
-        if: ${{ env.OPENZCODE_TEST_API_KEY != '' }}
+        if: ${{ env.OPENZCODE_TEST_API_KEY != '' && matrix.os == 'ubuntu-latest' }}
         run: node scripts/test-e2e.mjs
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: openzcode.cjs
+          name: openzcode-${{ matrix.os }}
           path: packages/cli/dist/openzcode.cjs

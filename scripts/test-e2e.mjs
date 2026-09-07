@@ -210,6 +210,23 @@ try {
   if (drinkAuto) await request("automation/delete", { id: drinkAuto.id });
   await request("automation/delete", { id: fireAuto.id });
 
+  // 13. 浏览器控制: agent 打开 example.com 并读取标题
+  eventLog.length = 0;
+  request("session/send", { sessionId: session.id, text: "请用浏览器打开 https://example.com , 用 browser_snapshot 或 browser_evaluate 读取页面主标题(<h1> 的文本), 只回答标题文本本身。" }).catch(() => {});
+  const turn6 = await waitForTurnDone(240000);
+  const browserToolUsed = eventLog.some((e) => e.event?.type === "tool_start" && e.event.name.startsWith("browser_"));
+  const text6 = eventLog.filter((e) => e.event?.type === "message" && e.event.message.role === "assistant")
+    .flatMap((e) => e.event.message.parts).filter((p) => p.type === "text").map((p) => p.text).join(" ");
+  check("浏览器: agent 使用了 browser_* 工具", turn6.ok && browserToolUsed, `tools: ${eventLog.filter((e) => e.event?.type === "tool_start").map((e) => e.event.name).join(",")}`);
+  check("浏览器: 读到了 Example Domain 标题", /example domain/i.test(text6), text6.slice(0, 150));
+
+  // 14. 电脑操作: 截屏并让模型读屏
+  eventLog.length = 0;
+  request("session/send", { sessionId: session.id, text: "请用 computer_screenshot 截取当前屏幕, 然后用一句话描述你看到了什么(如果是纯色/锁定屏幕也照实说)。" }).catch(() => {});
+  const turn7 = await waitForTurnDone(240000);
+  const shotUsed = eventLog.some((e) => e.event?.type === "tool_start" && e.event.name === "computer_screenshot");
+  check("电脑: agent 调用了 computer_screenshot", turn7.ok && shotUsed, `tools: ${eventLog.filter((e) => e.event?.type === "tool_start").map((e) => e.event.name).join(",")}`);
+
   console.log(`\n== 结果: ${passed} 通过, ${failed} 失败 ==`);
   console.log(`   事件总数 ${eventLog.length + " (含首轮)"} | 工具调用: ${[...new Set(toolStarts)].join(", ")}`);
   process.exitCode = failed ? 1 : 0;

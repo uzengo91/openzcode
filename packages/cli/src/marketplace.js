@@ -96,6 +96,14 @@ function zipSha256(file) {
 }
 
 function unzip(zip, destDir) {
+  if (process.platform === "win32") {
+    return new Promise((resolve, reject) => {
+      execFile("powershell", ["-NoProfile", "-NonInteractive", "-Command",
+        `Expand-Archive -Force -Path '${zip.replace(/'/g, "''")}' -DestinationPath '${destDir.replace(/'/g, "''")}'`],
+        { timeout: 120000, windowsHide: true },
+        (err) => (err ? reject(new Error(`解压失败: ${err.message}`)) : resolve()));
+    });
+  }
   return new Promise((resolve, reject) => {
     execFile("unzip", ["-q", "-o", zip, "-d", destDir], (err) => (err ? reject(new Error(`解压失败: ${err.message}`)) : resolve()));
   });

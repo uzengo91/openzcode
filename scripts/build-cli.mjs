@@ -20,6 +20,7 @@ const result = await build({
   outfile: out,
   minify: false,
   sourcemap: false,
+  external: ["playwright-core"], // resolved from node_modules at runtime (optional dep)
   banner: {
     js: [
       "/*!",

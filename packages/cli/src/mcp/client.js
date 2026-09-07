@@ -74,10 +74,14 @@ class McpConnection {
     const { command, args = [] } = this.cfg;
     if (!command) throw new Error("stdio server 缺少 command");
     const env = { ...process.env, ...this.cfg.env };
+    // Windows: .cmd/.bat shims (npx, npm…) must spawn through a shell
+    const needsShell = process.platform === "win32" && /\.(cmd|bat|exe)$/i.test(command);
     this.proc = spawn(command, args, {
       cwd: this.cfg.cwd || this.ctx.workspace,
       env,
       stdio: ["pipe", "pipe", "pipe"],
+      shell: needsShell,
+      windowsHide: true,
     });
     this.proc.on("error", (e) => { this.status = "error"; this.error = e.message; });
     this.proc.stderr.on("data", (d) => this.ctx.log && this.ctx.log(`[mcp:${this.name}] ${String(d).trimEnd().slice(0, 500)}`));

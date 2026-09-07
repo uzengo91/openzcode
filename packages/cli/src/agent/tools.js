@@ -9,6 +9,8 @@ const path = require("node:path");
 const os = require("node:os");
 const { execFile } = require("node:child_process");
 const crypto = require("node:crypto");
+const computer = require("../computer");
+const { BrowserManager } = require("../browser");
 
 const MAX_OUTPUT_CHARS = 30000;
 
@@ -36,35 +38,38 @@ function runBash(input, ctx) {
   if (!cmd.trim()) return Promise.resolve(errResult("command 不能为空"));
   const timeoutSec = Math.min(Math.max(Number(input.timeout_sec) || 60, 1), 600);
   const cwd = ctx.workspace;
+  const isWin = process.platform === "win32";
+  const opts = {
+    cwd,
+    timeout: timeoutSec * 1000,
+    maxBuffer: 10 * 1024 * 1024,
+    killSignal: "SIGTERM",
+    windowsHide: true,
+    env: {
+      ...process.env,
+      OPENZCODE_SESSION_ID: ctx.sessionId || "",
+      OPENZCODE_WORKSPACE: cwd,
+      TERM: "dumb",
+      NO_COLOR: "1",
+    },
+  };
 
   return new Promise((resolve) => {
-    execFile(
-      "/bin/bash",
-      ["-c", cmd],
-      {
-        cwd,
-        timeout: timeoutSec * 1000,
-        maxBuffer: 10 * 1024 * 1024,
-        killSignal: "SIGTERM",
-        env: {
-          ...process.env,
-          OPENZCODE_SESSION_ID: ctx.sessionId || "",
-          OPENZCODE_WORKSPACE: cwd,
-          TERM: "dumb",
-          NO_COLOR: "1",
-        },
-      },
-      (err, stdout, stderr) => {
-        let out = "";
-        if (stdout) out += stdout;
-        if (stderr) out += (out ? "\n--- stderr ---\n" : "") + stderr;
-        if (!out && err && err.code !== 0) out = `(无输出, 退出码 ${err.code ?? "?"})`;
-        if (err && err.killed) out += `\n[命令超时被终止: ${timeoutSec}s]`;
-        resolve(err && err.code !== 0 && err.killed !== true && !out.trim()
-          ? errResult(`${err.message}\n退出码 ${err.code ?? "?"}`)
-          : { ok: !(err && err.code !== 0), output: truncate(out || "(无输出)", "命令输出") });
-      }
-    );
+    const child = isWin
+      ? execFile("cmd.exe", ["/d", "/s", "/c", cmd], opts, onDone)
+      : execFile("/bin/bash", ["-c", cmd], opts, onDone);
+    void child;
+
+    function onDone(err, stdout, stderr) {
+      let out = "";
+      if (stdout) out += stdout;
+      if (stderr) out += (out ? "\n--- stderr ---\n" : "") + stderr;
+      if (!out && err && err.code !== 0) out = `(无输出, 退出码 ${err.code ?? "?"})`;
+      if (err && err.killed) out += `\n[命令超时被终止: ${timeoutSec}s]`;
+      resolve(err && err.code !== 0 && err.killed !== true && !out.trim()
+        ? errResult(`${err.message}\n退出码 ${err.code ?? "?"}`)
+        : { ok: !(err && err.code !== 0), output: truncate(out || "(无输出)", "命令输出") });
+    }
   });
 }
 
@@ -292,6 +297,190 @@ async function runWebFetch(input, ctx) {
   }
 }
 
+/* ------------------------------ computer use / browser ------------------------------ */
+
+let sharedBrowser = null;
+function browserMgr() {
+  if (!sharedBrowser) sharedBrowser = new BrowserManager();
+  return sharedBrowser;
+}
+
+const COMPUTER_TOOLS = [
+  {
+    name: "computer_screenshot",
+    description: "截取当前屏幕并作为图像返回给模型。GUI 自动化前先观察屏幕。返回屏幕尺寸信息。",
+    parameters: { type: "object", properties: {} },
+    run: async () => {
+      const r = await computer.screenshot();
+      return { ok: true, output: `屏幕截图 ${r.width || "?"}x${r.height || "?"} 已返回 (${computer.platform})`, image: r.image };
+    },
+  },
+  {
+    name: "computer_click",
+    description: "在屏幕坐标 (x, y) 点击。button: left(默认)/right/double。先 computer_screenshot 观察后再确定坐标。",
+    parameters: {
+      type: "object",
+      properties: {
+        x: { type: "number", description: "屏幕横坐标(像素)" },
+        y: { type: "number", description: "屏幕纵坐标(像素)" },
+        button: { type: "string", enum: ["left", "right", "double"] },
+      },
+      required: ["x", "y"],
+    },
+    danger: true,
+    run: async (input) => {
+      await computer.click(input.x, input.y, input.button || "left");
+      return { ok: true, output: `已在 (${Math.round(input.x)}, ${Math.round(input.y)}) ${input.button || "left"} 点击` };
+    },
+  },
+  {
+    name: "computer_type",
+    description: "向当前焦点窗口输入文本(相当于键盘输入)。",
+    parameters: {
+      type: "object",
+      properties: { text: { type: "string", description: "要输入的文本" } },
+      required: ["text"],
+    },
+    danger: true,
+    run: async (input) => {
+      await computer.type(String(input.text));
+      return { ok: true, output: `已输入 ${String(input.text).length} 字符` };
+    },
+  },
+  {
+    name: "computer_key",
+    description: "按组合键。格式 'cmd+c' / 'ctrl+shift+t' / 'Return' / 'Escape' / 'Tab' / 'Up' 等。macOS 的 cmd 即 ⌘。",
+    parameters: {
+      type: "object",
+      properties: { key: { type: "string", description: "组合键描述" } },
+      required: ["key"],
+    },
+    danger: true,
+    run: async (input) => {
+      await computer.key(String(input.key));
+      return { ok: true, output: `已按下 ${input.key}` };
+    },
+  },
+  {
+    name: "computer_scroll",
+    description: "滚动当前窗口。amount 正数向上、负数向下, 幅度 1-20。",
+    parameters: {
+      type: "object",
+      properties: { amount: { type: "number", description: "滚动格数, 正上负下" } },
+      required: ["amount"],
+    },
+    danger: true,
+    run: async (input) => {
+      await computer.scroll(input.amount);
+      return { ok: true, output: `已滚动 ${input.amount}` };
+    },
+  },
+];
+
+const BROWSER_TOOLS = [
+  {
+    name: "browser_open",
+    description: "打开浏览器(无头, 优先本机 Chrome/Edge)并导航到 URL。返回页面标题与地址。之后用 browser_snapshot 查看页面结构。",
+    parameters: {
+      type: "object",
+      properties: { url: { type: "string", description: "完整 URL, 默认 about:blank" } },
+    },
+    run: async (input) => {
+      const url = String(input.url || "about:blank");
+      if (!/^https?:\/\//.test(url) && url !== "about:blank") return { ok: false, output: "url 必须以 http(s):// 开头" };
+      if (url === "about:blank") {
+        const page = await browserMgr().page();
+        return { ok: true, output: JSON.stringify(await browserMgr().describe(page)) };
+      }
+      return { ok: true, output: JSON.stringify(await browserMgr().navigate(url)) };
+    },
+  },
+  {
+    name: "browser_navigate",
+    description: "在已打开的浏览器中跳转到新 URL。",
+    parameters: {
+      type: "object",
+      properties: { url: { type: "string" } },
+      required: ["url"],
+    },
+    run: async (input) => ({ ok: true, output: JSON.stringify(await browserMgr().navigate(String(input.url))) }),
+  },
+  {
+    name: "browser_snapshot",
+    description: "获取当前页面的可访问性快照(YAML 树), 元素带 [ref=eN] 引用 — 这是点击/输入的唯一事实来源, 禁止猜测选择器。",
+    parameters: { type: "object", properties: {} },
+    run: async () => ({ ok: true, output: (await browserMgr().snapshot()).text }),
+  },
+  {
+    name: "browser_click",
+    description: "点击 browser_snapshot 返回的 [ref=eN] 元素。button: left/right, double: 双击。",
+    parameters: {
+      type: "object",
+      properties: {
+        ref: { type: "string", description: "快照中的元素引用, 如 e12" },
+        button: { type: "string", enum: ["left", "right"] },
+        double: { type: "boolean" },
+      },
+      required: ["ref"],
+    },
+    danger: true,
+    run: async (input) => {
+      const meta = await browserMgr().clickRef(String(input.ref), { button: input.button, double: !!input.double });
+      return { ok: true, output: `已点击 [${input.ref}] → ${meta.title} ${meta.url}` };
+    },
+  },
+  {
+    name: "browser_type",
+    description: "向快照中 [ref=eN] 的输入框填入文本; submit=true 时回车提交。",
+    parameters: {
+      type: "object",
+      properties: {
+        ref: { type: "string" },
+        text: { type: "string" },
+        submit: { type: "boolean" },
+      },
+      required: ["ref", "text"],
+    },
+    danger: true,
+    run: async (input) => {
+      const meta = await browserMgr().fillRef(String(input.ref), String(input.text), { submit: !!input.submit });
+      return { ok: true, output: `已在 [${input.ref}] 输入${input.submit ? " 并回车" : ""} → ${meta.title}` };
+    },
+  },
+  {
+    name: "browser_evaluate",
+    description: "在页面上下文执行 JS 并返回结果(可 async)。用于读取页面数据。",
+    parameters: {
+      type: "object",
+      properties: { js: { type: "string", description: "JS 代码, 如 return document.title" } },
+      required: ["js"],
+    },
+    danger: true,
+    run: async (input) => ({ ok: true, output: (await browserMgr().evaluate(String(input.js))).slice(0, MAX_OUTPUT_CHARS) }),
+  },
+  {
+    name: "browser_screenshot",
+    description: "对当前页面截图并作为图像返回给模型。",
+    parameters: {
+      type: "object",
+      properties: { fullPage: { type: "boolean", description: "整页截图, 默认视口" } },
+    },
+    run: async (input) => {
+      const r = await browserMgr().screenshotPage({ fullPage: !!input.fullPage });
+      return { ok: true, output: "页面截图已返回", image: r.image };
+    },
+  },
+  {
+    name: "browser_close",
+    description: "关闭浏览器并释放资源。",
+    parameters: { type: "object", properties: {} },
+    run: async () => {
+      browserMgr().close();
+      return { ok: true, output: "浏览器已关闭" };
+    },
+  },
+];
+
 /* ------------------------------ registry ------------------------------ */
 
 const TOOLS = [
@@ -514,13 +703,18 @@ const TOOLS = [
       return Promise.resolve(ctx.automations.deleteFromTool(String(input.id || "")));
     },
   },
+  ...COMPUTER_TOOLS,
+  ...BROWSER_TOOLS,
 ];
 
-const TOOL_MAP = new Map(TOOLS.map((t) => [t.name, t]));
+const ALL_TOOLS = TOOLS;
+const TOOL_MAP = new Map(ALL_TOOLS.map((t) => [t.name, t]));
 
 function getTool(name) { return TOOL_MAP.get(name) || null; }
 function toolDefinitions() {
-  return TOOLS.map(({ name, description, parameters, danger }) => ({ name, description, parameters, danger: !!danger }));
+  return ALL_TOOLS.map(({ name, description, parameters, danger }) => ({ name, description, parameters, danger: !!danger }));
 }
 
-module.exports = { toolDefinitions, getTool, resolveInWorkspace, truncate, okResult, errResult, crypto };
+function closeBrowser() { sharedBrowser && sharedBrowser.close(); }
+
+module.exports = { toolDefinitions, getTool, closeBrowser, resolveInWorkspace, truncate, okResult, errResult, crypto };

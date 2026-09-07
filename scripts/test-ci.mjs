@@ -310,6 +310,13 @@ try {
   await request("plugin/remove", { name: "demo-plugin" });
   await request("marketplace/removeSource", { name: "test-market" });
 
+  /* ============ computer / browser availability (cross-platform) ============ */
+
+  const compStatus = await request("computer/status", {}, 30000);
+  check("computer/status 返回平台与后端", !!compStatus.platform && !!compStatus.screenshotBackend, JSON.stringify(compStatus));
+  const browserStatus = await request("browser/status", {}, 30000);
+  check("browser/status: playwright-core 可用", browserStatus.playwright === true, JSON.stringify(browserStatus));
+
   console.log(`\n== CI 结果: ${passed} 通过, ${failed} 失败 ==`);
   process.exitCode = failed ? 1 : 0;
 } catch (e) {

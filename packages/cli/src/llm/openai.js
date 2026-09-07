@@ -6,13 +6,20 @@
 //      {type:"tool_result", tool_use_id, content, is_error}]}
 "use strict";
 
-function toOpenAIMessages(system, messages) {
+function toOpenAIMessages(system, messages, { imageWindow = 3 } = {}) {
   const out = [];
   if (system) out.push({ role: "system", content: system });
-  for (const m of messages) {
+  const lastTextIdx = (() => {
+    let idx = -1;
+    for (let i = messages.length - 1; i >= 0 && messages.length - i <= imageWindow; i--) {
+      if ((messages[i].parts || []).some((p) => p.type === "image")) { idx = i; break; }
+    }
+    return idx === -1 ? messages.length : idx; // keep images from this index onward
+  })();
+  messages.forEach((m, i) => {
+    const keepImages = i >= lastTextIdx;
     if (m.role === "user") {
-      const text = (m.parts || []).filter((p) => p.type === "text").map((p) => p.text).join("\n");
-      out.push({ role: "user", content: text });
+      out.push({ role: "user", content: partsToOpenAIContent(m.parts, keepImages) });
     } else if (m.role === "assistant") {
       const text = (m.parts || []).filter((p) => p.type === "text").map((p) => p.text).join("");
       const toolUses = (m.parts || []).filter((p) => p.type === "tool_use");
@@ -27,16 +34,34 @@ function toOpenAIMessages(system, messages) {
     } else if (m.role === "tool") {
       for (const p of m.parts || []) {
         if (p.type === "tool_result") {
-          out.push({
-            role: "tool",
-            tool_call_id: p.tool_use_id,
-            content: typeof p.content === "string" ? p.content : JSON.stringify(p.content),
-          });
+          const contentParts = [];
+          if (p.text !== undefined || p.content !== undefined) {
+            const txt = typeof (p.content ?? p.text) === "string" ? (p.content ?? p.text) : JSON.stringify(p.content ?? p.text);
+            contentParts.push({ type: "text", text: txt });
+          }
+          for (const img of p.images || []) contentParts.push(imageToOpenAI(img, keepImages));
+          out.push({ role: "tool", tool_call_id: p.tool_use_id, content: contentParts });
         }
       }
     }
-  }
+  });
   return out;
+}
+
+function imageToOpenAI(img, keep) {
+  if (!keep) return { type: "text", text: "[截图已省略]" };
+  return { type: "image_url", image_url: { url: `data:${img.mime || "image/png"};base64,${img.data}` } };
+}
+
+function partsToOpenAIContent(parts, keepImages) {
+  const blocks = [];
+  for (const p of parts || []) {
+    if (p.type === "text" && p.text) blocks.push({ type: "text", text: p.text });
+    else if (p.type === "image") blocks.push(imageToOpenAI(p, keepImages));
+  }
+  if (!blocks.length) return "";
+  if (blocks.every((b) => b.type === "text")) return blocks.map((b) => b.text).join("\n");
+  return blocks;
 }
 
 function joinUrl(base, suffix) {

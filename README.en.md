@@ -123,6 +123,22 @@ npm run package          # build the release zip
 - `test:e2e` and `test:artifact` need a real model service: set `OPENZCODE_TEST_API_KEY` (optionally `OPENZCODE_TEST_BASE_URL`, `OPENZCODE_TEST_MODEL`), or configure a default provider in `~/.openzcode/config.json`. Keys never enter the repository.
 - `test:artifact` is the final acceptance gate: it drives the agent with the **built artifact** (`OPENZCODE_BUNDLE` may point at the openzcode.cjs extracted from a release zip) using **this repository** as the workspace — the model must read real source files (`packages/cli/src/version.js`, `README.md`, `packages/app/package.json`) and write extracted facts into `.oz-itest/` (gitignored); assertions compare the bytes on disk against ground truth parsed from the repo itself.
 
+## Computer Use & Browser Control
+
+**Computer use** (zero native dependencies; per-platform backends; dangerous ops require approval):
+`computer_screenshot` (returned to the model as an image), `computer_click` (left/right/double), `computer_type`, `computer_key` (`cmd+c`/`ctrl+shift+t`/`Return`…), `computer_scroll`.
+
+| OS | Screenshot | Mouse/Keyboard |
+|---|---|---|
+| macOS | `screencapture` | osascript (keys/left click); [cliclick](https://github.com/BlueM/cliclick) adds right/double click |
+| Windows | PowerShell + GDI+ | PowerShell SendInput/SendKeys (full support) |
+| Linux | gnome-screenshot / scrot / import | xdotool (X11) |
+
+**Browser control** (playwright-core, optional dep; reuses installed Chrome/Edge — no browser downloads):
+`browser_open` / `browser_navigate` / `browser_snapshot` (ARIA snapshot with `[ref=eN]` refs) / `browser_click` / `browser_type` / `browser_evaluate` / `browser_screenshot` / `browser_close`.
+Snapshot refs are the single source of truth for clicking/typing. Screenshots are fed back to the model as images. Set `OPENZCODE_BROWSER_HEADLESS=0` for a visible browser.
+If no browser is found you get a clear install hint (`npm i playwright-core` + Chrome/Edge, or `npx playwright install chromium`).
+
 ## Automations (scheduled tasks)
 
 The engine hosts a scheduler (30s tick by default). Automations persist in SQLite; when due, the engine opens a new session and runs the prompt unattended with the configured permission mode, recording every run.
