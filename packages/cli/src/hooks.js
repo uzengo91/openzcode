@@ -27,13 +27,15 @@ function hookDirs({ workspace, plugins }) {
 function parseBinding(file, content) {
   const lines = (content || "").split(/\r?\n/).slice(0, 5);
   for (const line of lines) {
-    if (!line || line.startsWith("#!")) continue; // shebang
-    const m = /^#\s*openzcode-hook:\s*(\w+)(?:\s+(\S+))?/.exec(line.trim());
+    const t = line.trim();
+    if (!t || t.startsWith("#!") || t.startsWith("//")) continue;
+    const m = /^[/#]+\s*openzcode-hook:\s*(\w+)(?:\s+(\S+))?/.exec(t);
     if (m) {
       if (!EVENTS.includes(m[1])) return null;
       return { event: m[1], tool: m[2] || null };
     }
-    if (line.trim() && !line.trim().startsWith("#")) break; // code before binding → not a hook
+    if (t.startsWith("#") || t.startsWith("//")) continue;
+    break; // code before binding → not a hook
   }
   return null;
 }
