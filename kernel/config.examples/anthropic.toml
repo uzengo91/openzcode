@@ -1,0 +1,14 @@
+# OpenZCode Anthropic 兼容端点配置示例（M1 起提供适配器；当前先占位文档）
+#
+# codex 内核原生 wire_api 仅支持 responses/chat。Anthropic Messages 协议
+# 由 OpenZCode 适配器提供（见 PLAN-M1 1.5）；此文件在 M1 完成前不可用。
+#
+# 目标形态（M1 验收）:
+# model = "GLM-5.3-Flash"
+# model_provider = "zcode-anthropic"
+#
+# [model_providers.zcode-anthropic]
+# name = "OpenZCode · Anthropic 兼容"
+# base_url = "https://<anthropic-compatible-host>"
+# env_key = "OZ_ANTHROPIC_API_KEY"
+# wire_api = "anthropic"    # M1 新增

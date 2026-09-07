@@ -1,0 +1,18 @@
+# OpenZCode GLM 端点配置示例（阿里云 MaaS / OpenAI 兼容 wire 协议）
+#
+# 用法: 复制到 ~/.codex/config.toml（与既有内容合并），然后:
+#   export GLM_API_KEY=sk-xxxx
+#   openzcode "你的任务"
+#
+# ----------------------------------------------------------------
+model = "ZHIPU/GLM-5.3-Flash"
+model_provider = "glm"
+
+[model_providers.glm]
+name = "OpenZCode · 阿里云 MaaS (GLM)"
+base_url = "https://llm-uceufy13uqn9w0g0.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+env_key = "GLM_API_KEY"
+wire_api = "chat"          # 关键: 国产 OpenAI 兼容端点用 chat completions 协议
+request_max_retries = 3
+stream_max_retries = 5
+stream_idle_timeout_ms = 90000

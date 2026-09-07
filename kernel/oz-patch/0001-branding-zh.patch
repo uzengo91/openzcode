@@ -1,0 +1,15 @@
+--- /tmp/codex-full/codex-rs/tui/src/onboarding/welcome.rs	2026-09-07 22:34:14
++++ codex-rs/tui/src/onboarding/welcome.rs	2026-09-07 23:17:58
+@@ -93,9 +93,9 @@
+         }
+         lines.push(Line::from(vec![
+             "  ".into(),
+-            "Welcome to ".into(),
+-            "Codex".bold(),
+-            ", OpenAI's command-line coding agent".into(),
++            "欢迎使用 ".into(),
++            "OpenZCode".bold(),
++            " · 单二进制双形态编码 Agent (内核: Codex, Apache-2.0)".into(),
+         ]));
+ 
+         Paragraph::new(lines)
