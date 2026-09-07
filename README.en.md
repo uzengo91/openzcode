@@ -124,6 +124,7 @@ npm run package          # build the release zip
 - `test:artifact` is the final acceptance gate: it drives the agent with the **built artifact** (`OPENZCODE_BUNDLE` may point at the openzcode.cjs extracted from a release zip) using **this repository** as the workspace — the model must read real source files (`packages/cli/src/version.js`, `README.md`, `packages/app/package.json`) and write extracted facts into `.oz-itest/` (gitignored); assertions compare the bytes on disk against ground truth parsed from the repo itself.
 
 - [Roadmap · Gap analysis vs ZCode and the roadmap](ROADMAP.md)
+- [Roadmap V2 · Rebuild on the Codex CLI kernel with a ZCode experience (current direction)](ROADMAP-V2.md)
 
 ## Computer Use & Browser Control
 

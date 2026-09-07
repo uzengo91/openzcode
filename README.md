@@ -125,6 +125,7 @@ npm run package          # 打 release zip
 - `test:ci` 覆盖 MCP 双 transport（stdio + Streamable HTTP 的握手/tools list/tools call）、技能发现与 frontmatter、命令展开（$ARGUMENTS/$1）、插件安装/移除/启停 —— 全程无 LLM、无外网。
 
 - [Roadmap · 对标 ZCode 的差距分析与路线图](ROADMAP.md)
+- [Roadmap V2 · 基于 Codex CLI 内核 × ZCode 体验的改造方案（当前方向）](ROADMAP-V2.md)
 
 ## 电脑操作 与 浏览器控制
 
