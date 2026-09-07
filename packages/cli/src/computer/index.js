@@ -292,4 +292,12 @@ async function computerStatus() {
   return status;
 }
 
-module.exports = { screenshot, click, key, type, scroll, computerStatus, platform: process.platform, hasCliclick: haveCliclick };
+// semantic (element-level) layer
+const ax = require("./ax");
+
+module.exports = {
+  screenshot, click, key, type, scroll, computerStatus,
+  platform: process.platform, hasCliclick: haveCliclick,
+  appState: ax.appState, clickElement: ax.clickElement, setElementValue: ax.setElementValue,
+  listWindows: ax.listWindows, clipboardGet: ax.clipboardGet, clipboardSet: ax.clipboardSet, axStatus: ax.axStatus,
+};

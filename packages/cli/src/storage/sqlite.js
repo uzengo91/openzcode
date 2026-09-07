@@ -100,15 +100,19 @@ class SqliteStorage {
 
   /** full history rewrite (compact): wipes messages, inserts the new list */
   replaceMessages(sessionId, messages) {
-    const run = this.db.transaction((sid, list) => {
-      this.db.prepare("DELETE FROM message WHERE session_id = ?").run(sid);
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare("DELETE FROM message WHERE session_id = ?").run(sessionId);
       const ins = this.db.prepare("INSERT INTO message (id, session_id, role, parts, created_at) VALUES (?,?,?,?,?)");
-      for (const m of list) {
-        ins.run(id("msg"), sid, m.role, JSON.stringify(m.parts || []), m.createdAt || m.created_at || now());
+      for (const m of messages) {
+        ins.run(id("msg"), sessionId, m.role, JSON.stringify(m.parts || []), m.createdAt || m.created_at || now());
       }
-      this.touchSession(sid);
-    });
-    run(sessionId, messages);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      try { this.db.exec("ROLLBACK"); } catch {}
+      throw e;
+    }
+    this.touchSession(sessionId);
   }
 
   setTodos(sessionId, items) {

@@ -453,6 +453,86 @@ const COMPUTER_TOOLS = [
       return { ok: true, output: `已滚动 ${input.amount}` };
     },
   },
+  {
+    name: "computer_app_state",
+    description: "读取当前应用的元素树(语义化): 每个元素带 [eN] 引用/角色/名称/值/位置。优先于坐标点击 — 先取树再按 ref 操作。授权受限时自动降级为窗口级树(窗口中心可点击)。",
+    parameters: {
+      type: "object",
+      properties: { appHint: { type: "string", description: "目标应用名(如 Finder/Chrome/微信), 省略则取前台应用" } },
+    },
+    run: async (input) => {
+      const r = await computer.appState({ appHint: input.appHint });
+      return { ok: r.ok, output: String(r.output).slice(0, MAX_OUTPUT_CHARS) };
+    },
+  },
+  {
+    name: "computer_click_ref",
+    description: "按 computer_app_state 返回的 [eN] 引用点击元素(取元素中心)。比裸坐标可靠。",
+    parameters: {
+      type: "object",
+      properties: {
+        ref: { type: "string", description: "元素引用, 如 e5" },
+        appHint: { type: "string" },
+        button: { type: "string", enum: ["left", "right"] },
+        double: { type: "boolean" },
+      },
+      required: ["ref"],
+    },
+    danger: true,
+    run: async (input) => {
+      const r = await computer.clickElement(String(input.ref), { appHint: input.appHint, button: input.button, double: !!input.double });
+      return { ok: r.ok, output: r.output };
+    },
+  },
+  {
+    name: "computer_set_value",
+    description: "向 computer_app_state 返回的 [eN] 输入类元素填入文本(点击聚焦后键入)。",
+    parameters: {
+      type: "object",
+      properties: {
+        ref: { type: "string" },
+        text: { type: "string" },
+        appHint: { type: "string" },
+      },
+      required: ["ref", "text"],
+    },
+    danger: true,
+    run: async (input) => {
+      const r = await computer.setElementValue(String(input.ref), String(input.text), { appHint: input.appHint });
+      return { ok: r.ok, output: r.output };
+    },
+  },
+  {
+    name: "computer_windows",
+    description: "列出所有可见窗口(应用名/标题/位置尺寸)。",
+    parameters: { type: "object", properties: {} },
+    run: async () => {
+      const r = await computer.listWindows();
+      return { ok: r.ok, output: r.output };
+    },
+  },
+  {
+    name: "clipboard_read",
+    description: "读取系统剪贴板文本。",
+    parameters: { type: "object", properties: {} },
+    run: async () => {
+      const r = await computer.clipboardGet();
+      return { ok: r.ok, output: String(r.output).slice(0, MAX_OUTPUT_CHARS) };
+    },
+  },
+  {
+    name: "clipboard_write",
+    description: "写入文本到系统剪贴板。",
+    parameters: {
+      type: "object",
+      properties: { text: { type: "string" } },
+      required: ["text"],
+    },
+    run: async (input) => {
+      const r = await computer.clipboardSet(String(input.text ?? ""));
+      return { ok: r.ok, output: r.output };
+    },
+  },
 ];
 
 const BROWSER_TOOLS = [

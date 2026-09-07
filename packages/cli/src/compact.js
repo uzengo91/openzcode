@@ -20,11 +20,12 @@ function estimateTokens(storage, sessionId) {
   return { tokens: Math.ceil(chars / 4), messages: msgs.length };
 }
 
-async function summarize(provider, storage, sessionId, { keepRecent = 6 } = {}) {
+async function summarize(provider, storage, sessionId, { keepRecent = 6, force = false } = {}) {
   const msgs = storage.getMessages(sessionId);
-  if (msgs.length <= keepRecent + 2) return { compacted: false, reason: "消息太少无需压缩" };
+  if (!force && msgs.length <= keepRecent + 2) return { compacted: false, reason: `消息太少无需压缩 (${msgs.length} 条)` };
 
-  const oldMsgs = msgs.slice(0, msgs.length - keepRecent);
+  const keep = Math.min(keepRecent, Math.max(2, msgs.length - 1));
+  const oldMsgs = msgs.slice(0, msgs.length - keep);
   const transcript = oldMsgs.map((m) => {
     const role = m.role === "assistant" ? "助手" : m.role === "user" ? "用户" : "工具";
     const text = (m.parts || [])
@@ -55,7 +56,7 @@ async function summarize(provider, storage, sessionId, { keepRecent = 6 } = {}) 
   storage.replaceMessages(sessionId, [
     { role: "user", parts: [{ type: "text", text: "[会话已压缩] 以下是此前对话的结构化摘要:\n\n" + summary }] },
     { role: "assistant", parts: [{ type: "text", text: "已了解压缩摘要, 继续任务。" }] },
-    ...msgs.slice(msgs.length - keepRecent).map((m) => ({ role: m.role, parts: m.parts, createdAt: m.created_at })),
+    ...msgs.slice(msgs.length - keep).map((m) => ({ role: m.role, parts: m.parts, createdAt: m.created_at })),
   ]);
   return { compacted: true, summary, replacedMessages: oldMsgs.length };
 }

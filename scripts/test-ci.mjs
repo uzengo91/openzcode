@@ -371,6 +371,17 @@ echo '{"deny":true,"reason":"危险命令被 hook 拦截"}'
 
   const compStatus = await request("computer/status", {}, 30000);
   check("computer/status 返回平台与后端", !!compStatus.platform && !!compStatus.screenshotBackend, JSON.stringify(compStatus));
+  check("computer/status 含语义层(ax)探测", "ax" in compStatus, JSON.stringify(Object.keys(compStatus)));
+
+  // semantic layer: app_state always returns a usable tree (AX or window-level fallback)
+  const appState = await request("computer/app_state", {}, 60000).catch((e) => ({ ok: false, output: e.message }));
+  const hasRefs = /\[e\d+\]/.test(appState.output || "");
+  check("computer_app_state 返回可引用元素树(AX 或窗口降级)", appState.ok === true && hasRefs, String(appState.output || "").slice(0, 150));
+  const wins = await request("computer/windows", {}, 30000);
+  check("computer_windows 列出窗口", wins.ok === true && String(wins.output).length > 0, String(wins.output).slice(0, 100));
+  await request("computer/clipboard_write", { text: "OZ-CI-" + Date.now() }, 15000);
+  const cb = await request("computer/clipboard_read", {}, 15000);
+  check("clipboard_write→read 往返", cb.ok === true && /^OZ-CI-/.test(String(cb.output).trim()), String(cb.output).slice(0, 60));
   const browserStatus = await request("browser/status", {}, 30000);
   check("browser/status: playwright-core 可用", browserStatus.playwright === true, JSON.stringify(browserStatus));
 

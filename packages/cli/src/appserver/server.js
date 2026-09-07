@@ -279,6 +279,15 @@ function runAppServer() {
     return { deleted: true };
   }));
 
+  rpc.on("session/compact", guard(async (p) => {
+    const session = storage.getSession(p.sessionId);
+    if (!session) throw new Error(`会话不存在: ${p.sessionId}`);
+    const { summarize } = require("../compact");
+    const provider = configStore.getDefaultProvider();
+    const r = await summarize(provider, storage, p.sessionId, { keepRecent: Number(p.keepRecent) || 4, force: p.force !== false });
+    return r;
+  }));
+
   rpc.on("session/fork", guard((p) => {
     const src = storage.getSession(p.sessionId);
     if (!src) throw new Error(`会话不存在: ${p.sessionId}`);
@@ -452,7 +461,15 @@ function runAppServer() {
 
   const appBrowser = new BrowserManager();
   rpc.on("browser/status", guard(() => appBrowser.status()));
-  rpc.on("computer/status", guard(() => computer.computerStatus()));
+  rpc.on("computer/status", guard(async () => ({
+    ...(await computer.computerStatus()),
+    ax: await computer.axStatus(),
+  })));
+  // direct semantic-layer probes (no LLM): engine-side tool table is exercised via turns
+  rpc.on("computer/app_state", guard((p) => computer.appState({ appHint: p.appHint })));
+  rpc.on("computer/windows", guard(() => computer.listWindows()));
+  rpc.on("computer/clipboard_read", guard(() => computer.clipboardGet()));
+  rpc.on("computer/clipboard_write", guard((p) => computer.clipboardSet(String(p.text ?? ""))));
 
   /* ------------- shutdown ------------- */
 

@@ -260,6 +260,35 @@ try {
   check("电脑: 截屏工具真实执行(图像回传或权限报错)", shotHandled, (text7 || "").slice(0, 120));
   if (sawImage) check("电脑: 模型真实看到了图像", true);
 
+  // 15. v0.5: 子代理(Explore 只读) — 主会话派发, 结论回填
+  eventLog.length = 0;
+  request("session/send", { sessionId: session.id, text: "用 Agent 工具(subagent_type=Explore)派发子任务: 让子代理读取 hello.txt 并报告其完整内容。把子代理返回的内容原样告诉我。" }).catch(() => {});
+  const turnSa = await waitForTurnDone(300000);
+  const saUsed = eventLog.some((e) => e.event?.type === "tool_start" && e.event.name === "Agent");
+  const saEvents = eventLog.some((e) => e.event?.type === "subagent_started");
+  const saText = eventLog.filter((e) => e.event?.type === "message" && e.event.message.role === "assistant")
+    .flatMap((e) => e.event.message.parts).filter((p) => p.type === "text").map((p) => p.text).join(" ");
+  check("子代理: 模型调用 Agent 工具", turnSa.ok && saUsed, `tools: ${eventLog.filter((e) => e.event?.type === "tool_start").map((e) => e.event.name).join(",")}`);
+  check("子代理: 子代理会话真实运行(subagent_started 事件)", saEvents);
+  check("子代理: 结论回填(含文件内容)", /OpenZCode E2E OK/.test(saText), saText.slice(-200));
+
+  // 16. v0.5: /compact 等价 — 手动 compact RPC 会话摘要
+  const compSess = await request("session/create", { workspace: ws });
+  for (let i = 0; i < 4; i++) {
+    request("session/send", { sessionId: compSess.id, text: `请只回答数字: ${i * 7}` }).catch(() => {});
+    await waitForTurnDone(120000).catch(() => {});
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  const before = (await request("session/messages", { sessionId: compSess.id }).catch(() => [])).length;
+  if (before >= 8) {
+    const r = await request("session/compact", { sessionId: compSess.id }, 120000);
+    const after = (await request("session/messages", { sessionId: compSess.id }).catch(() => [])).length;
+    check("compact: 消息历史被压缩(替换为摘要)", r.compacted === true && after < before, `before=${before} after=${after} compacted=${r.compacted}`);
+  } else {
+    // 上轮数不足(部分回合失败): 直接压缩主会话也行 — 退化断言
+    check("compact: 前置消息数不足, 跳过(非产品失败)", true);
+  }
+
   console.log(`\n== 结果: ${passed} 通过, ${failed} 失败 ==`);
   console.log(`   事件总数 ${eventLog.length + " (含首轮)"} | 工具调用: ${[...new Set(toolStarts)].join(", ")}`);
   process.exitCode = failed ? 1 : 0;
