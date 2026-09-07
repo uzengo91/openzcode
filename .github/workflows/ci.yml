@@ -29,7 +29,15 @@ jobs:
         run: node scripts/build-cli.mjs
 
       - name: Smoke test (no LLM)
-        run: node scripts/test-ci.mjs
+        run: node scripts/test-ci.mjs 2>&1 | tee ci-output.txt
+        shell: bash
+
+      - name: Upload CI log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-log-${{ matrix.os }}
+          path: ci-output.txt
 
       - name: LLM E2E (optional, needs secret)
         env:
