@@ -189,6 +189,8 @@ async fn chat_wire_api_tool_call_round_trip() {
     // Mount ordered responses: first the tool call, then the completion.
     struct SeqResponder {
         num_calls: std::sync::atomic::AtomicUsize,
+        tool_call_body: String,
+        completion_body: String,
     }
     impl wiremock::Respond for SeqResponder {
         fn respond(&self, _: &wiremock::Request) -> wiremock::ResponseTemplate {
@@ -197,9 +199,9 @@ async fn chat_wire_api_tool_call_round_trip() {
             wiremock::ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
                 .set_body_string(if call == 0 {
-                    tool_call_body.clone()
+                    self.tool_call_body.clone()
                 } else {
-                    completion_body.clone()
+                    self.completion_body.clone()
                 })
         }
     }
@@ -207,6 +209,8 @@ async fn chat_wire_api_tool_call_round_trip() {
         .and(path("/chat/completions"))
         .respond_with(SeqResponder {
             num_calls: std::sync::atomic::AtomicUsize::new(0),
+            tool_call_body,
+            completion_body,
         })
         .expect(2)
         .mount(&server)
