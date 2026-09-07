@@ -3,7 +3,8 @@
 > **方案转变（2026-09-07）**：放弃自研 JS 内核继续追赶，改为 **基于 OpenAI Codex CLI（Apache-2.0，Rust）做改造**：
 > **内核 = Codex CLI**（沙箱/agent 循环/协议栈/多端架构直接继承），**外观与体验 = ZCode**（单二进制双形态、Electron App 驱动 CLI 的 app-server 模式、GLM/国产模型生态、中文体验）。
 > **同时支持 OpenAI / Anthropic 兼容端点**（含 GLM、DeepSeek、Qwen 等国产兼容端点为一等公民）。
-> 现有 JS CLI（`packages/cli`）**保留不删**：作为行为参照、降级备份与 GUI 联调夹具，直至 Rust 内核功能对齐后归档。
+> **对齐基准 = ZCode 现有功能**（v0.5.0 JS 版已落地的全部能力：MCP/Skills/插件/命令/Hooks/记忆/自动化调度/插件市场/电脑操作/浏览器控制/权限双轨/会话管理/ZCode 风格 GUI）——这些功能清单直接作为 Codex 内核改造的**需求规格**，逐项在 Rust 内核 + 侧车上对齐实现。
+> JS CLI（`packages/cli`）**保留不删**、不再投入开发：仅作为可运行的降级备份与 GUI 联调夹具；其功能以"已验收行为"的形式成为 V2 的验收基准。
 
 ---
 
@@ -76,9 +77,11 @@ openzcode (Rust 单二进制 = Codex CLI 内核改造)
 | 2.1 | **OS 沙箱默认启用** | macOS Seatbelt / Linux Landlock / Windows ACL（codex 原生）；GUI 模式条映射 read-only/workspace-write/danger；hooks(oz) 在沙箱外做策略层 | 默认 workspace-write 沙箱下完成真实任务 |
 | 2.2 | MCP 对齐 | codex rmcp-client 配置对接 GUI 的 MCP 管理面板（mcpServers 迁移器） | 现有 calc fixture 经 GUI 配置跑通 |
 | 2.3 | Skills/插件市场 | codex skills + plugin marketplace 接 GUI 市场页；JS 版市场索引格式迁移器 | 市场安装 commit-helper 到 codex skills 体系 |
-| 2.4 | 侧车能力 P0：**自动化调度** | `oz-scheduler`（Rust 侧或 Node 侧车进程）：cron/every/once + 无人值守 turn（复用 thread/start）；GUI 自动化面板直连 | 每日任务真实无人触发 |
-| 2.5 | 侧车能力 P1：**记忆** | workspaceKey 记忆目录沿用 JS 版数据；以 skill/AGENTS.md 注入方式桥接内核系统提示 | 记忆跨会话生效 |
-| 2.6 | 电脑操作/浏览器 | 内核以 MCP server 形式挂载我们 JS 的 computer/browser 工具（sidecar MCP），零 Rust 重写 | 元素树/截屏/浏览器在 Rust 内核会话中可用 |
+| 2.4 | **对齐 ZCode：自动化调度** | `oz-scheduler`（Node 侧车进程，复用 JS 版 automations 模块）：cron/every/once + maxRuns + 乐观锁防双触发 + 无人值守 turn（调 thread/start）；GUI 自动化面板数据源切换到侧车 RPC | JS 版自动化全部行为在 V2 等价可用；每日任务真实无人触发 |
+| 2.5 | **对齐 ZCode：记忆系统** | `oz-memory`（侧车）：workspaceKey 目录 + MEMORY.md + [[链接]] 格式与 JS 版**二进制兼容**（同一数据目录直接沿用）；经 AGENTS.md 注入 + `memory_read/write` 工具桥接内核 | JS 版记忆数据零迁移可用；跨会话生效 |
+| 2.6 | **对齐 ZCode：电脑操作 + 浏览器控制** | JS 版 computer(语义元素树+窗口降级)/browser(Playwright 8 工具) 以 **MCP server 形式**打包为 `openzcode-computer` / `openzcode-browser` 侧车，内核经 MCP 挂载——工具行为与 JS 版逐一对齐 | E2E：截屏回传模型、窗口树降级、example.com 标题读取 三断言在内核会话复现 |
+| 2.7 | **对齐 ZCode：Hooks** | codex 原生 plugin hooks 为主；`hooks/` 三级目录(用户/项目/插件) + `openzcode-hook:` 注释绑定格式作为**兼容层**迁移到 codex 插件清单 | JS 版 shield.sh deny 场景在 V2 复现 |
+| 2.8 | **对齐 ZCode：自定义命令 + Skills** | codex skills/prompts 原生承载；JS 版 commands($ARGUMENTS) 与 SKILL.md 格式写迁移器（数据零丢失） | JS 版 translate.md / repo-conventions 在 V2 可用 |
 
 **M2 退出标准**：JS 版全部能力在 Rust 内核上可用 + 沙箱/steer/rollback 三个 JS 版没有的能力。
 
@@ -96,15 +99,36 @@ openzcode (Rust 单二进制 = Codex CLI 内核改造)
 | **GUI 线** | M1.1-1.3/1.6 + G 全部（现有 renderer 的 RPC 对接改造） | 现有 JS 栈 |
 | **侧车线** | M2.4/2.5/2.6（Node 侧车 + MCP 桥） | 现有 JS 资产复用 |
 
-## 五、测试与验收基线（继承现有体系）
+## 五、测试与验收基线 = 「ZCode 功能对齐矩阵」
 
-- **内核**：cargo test + 上游测试套件；GLM/Anthropic 双端点 E2E（复用 `scripts/test-e2e.mjs` 改造为 app-server 协议版）
-- **GUI**：现 renderer 测试改造后沿用；`test:artifact` 语义平移（读源码/写文件/市场/自动化）
-- **对照验收**：JS 版 test-ci 的 60 断言逐项标注「Rust 内核对应能力」——全部 ✅ 才允许 JS 归档
+**验收的唯一基准是 ZCode（JS v0.5.0）现有功能行为**，逐项建矩阵（功能 → V2 实现方式 → 验收断言）：
+
+| ZCode 现有功能 | V2 承载方式 | 验收断言（复用现有测试改造） |
+|---|---|---|
+| 权限双轨 ask/yolo + 审批卡 | codex approvals 原生 | 审批卡交互 + deny 路径 |
+| MCP（stdio+HTTP, mcp__x__y） | codex rmcp-client | calc fixture 双 transport |
+| Skills（SKILL.md 三作用域） | codex skills + 迁移器 | repo-conventions 自动触发 |
+| 插件（skills/commands/mcp 三贡献） | codex plugin + 迁移器 | demo-plugin 三贡献可见 |
+| 市场（索引+zip+sha256+localPath） | codex marketplace + 索引兼容层 | 安装 commit-helper |
+| 自定义命令（$ARGUMENTS） | codex prompts + 迁移器 | /translate 展开 |
+| Hooks（三级+5 事件+deny） | codex plugin hooks + 兼容层 | shield.sh deny 场景 |
+| 记忆（[[链接]]+MEMORY.md） | oz-memory 侧车（数据兼容） | 写→读→新会话注入 |
+| 自动化（cron/every/once+实火） | oz-scheduler 侧车 | 一次性任务无人值守触发 |
+| 电脑操作（元素树/窗口/剪贴板/截屏） | openzcode-computer MCP 侧车 | 截屏回传+窗口树降级断言 |
+| 浏览器控制（Playwright 8 工具） | openzcode-browser MCP 侧车 | example.com 标题断言 |
+| 会话（fork/compact/历史） | codex thread 原生 | fork 独立性+压缩断言 |
+| Plan 模式/提问 | codex plan/approvals 原生（缺则侧车） | 写拦截+选项回传 |
+| web_search/web_fetch | codex web search 工具（或侧车） | 时效问答断言 |
+| ZCode 风格 GUI 全部 | 现 renderer 切 app-server 协议 | 数据源 RPC 矩阵 12 项 |
+| 双端点 GLM+Anthropic | oz-providers | 双端点 E2E 各跑通 |
+
+- **内核**：cargo test + 上游套件；`test-e2e.mjs` 改造为 app-server 协议版（断言原样保留）
+- **GUI**：renderer 沿用；`test:artifact` 语义平移
+- **JS 版 test-ci 60 断言** → 逐项映射进上表；矩阵全绿 = V2 达到替换标准
 
 ## 六、明确不做（记录取舍）
 
 - 不改 codex-core 内部（agent 循环/沙箱实现）——只加 crate、不加冲突
 - 不引入 codex 的云端(Codex Web)/语音/企业鉴权——与 ZCode 定位无关
 - 不使用 "codex/OpenAI" 商标与名称——产品名 OpenZCode，LICENSE/NOTICE 合规保留
-- JS 内核不再加新功能——仅致命 bug 修复，直至归档
+- JS 内核冻结为"行为基准 + 降级备份"：不再加功能、不再修非致命 bug；其全部已验收功能 = V2 的需求规格与验收基准
