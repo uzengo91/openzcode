@@ -165,9 +165,9 @@ async function macWindowList() {
 const cache = new Map();
 const CACHE_MS = 10000;
 
-async function macAppState(appHint, maxElements = 200) {
+async function macAppState(appHint, maxElements = 200, timeoutMs = 20000) {
   const script = macTreeScript(appHint || null, maxElements);
-  const r = await run("osascript", ["-e", script], { timeout: 20000 });
+  const r = await run("osascript", ["-e", script], { timeout: timeoutMs });
   if (r.code !== 0) {
     const msg = (r.stderr || r.err?.message || "").trim();
     if (/assistive access|not allowed/i.test(msg)) {
@@ -421,7 +421,7 @@ async function axStatus() {
     const probe = await run("osascript", ["-e", `tell application "System Events" to get name of first application process whose frontmost is true`], { timeout: 8000 });
     if (probe.code === 0) {
       // process enumeration works; verify the window tree is actually readable
-      const tree = await macAppState(null, 50);
+      const tree = await macAppState(null, 50, 8000);
       const readable = tree.ok && tree.text && tree.text.includes("EL|");
       return {
         platform: "darwin",

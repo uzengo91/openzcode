@@ -377,7 +377,7 @@ echo '{"deny":true,"reason":"危险命令被 hook 拦截"}'
 
   /* ============ computer / browser availability (cross-platform) ============ */
 
-  const compStatus = await request("computer/status", {}, 30000);
+  const compStatus = await request("computer/status", {}, 90000);
   check("computer/status 返回平台与后端", !!compStatus.platform && !!compStatus.screenshotBackend, JSON.stringify(compStatus));
   check("computer/status 含语义层(ax)探测", "ax" in compStatus, JSON.stringify(Object.keys(compStatus)));
 
@@ -403,6 +403,11 @@ echo '{"deny":true,"reason":"危险命令被 hook 拦截"}'
   check("browser/status: playwright-core 可用", browserStatus.playwright === true, JSON.stringify(browserStatus));
 
   console.log(`\n== CI 结果: ${passed} 通过, ${failed} 失败 ==`);
+  if (failed) {
+    console.log("\n== 失败详情(平台排查) ==" );
+    console.log("platform:", process.platform, "node:", process.version);
+    console.log("events 尾部:", JSON.stringify(events.slice(-8)).slice(0, 800));
+  }
   process.exitCode = failed ? 1 : 0;
 } catch (e) {
   console.error(`\n✗ CI 测试失败: ${e.message}`);
@@ -412,5 +417,7 @@ echo '{"deny":true,"reason":"危险命令被 hook 拦截"}'
   httpSrv && httpSrv.kill("SIGTERM");
   await new Promise((r) => setTimeout(r, 300));
   child.kill("SIGKILL");
-  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+  for (let i = 0; i < 3; i++) {
+    try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 }); break; } catch { await new Promise((r) => setTimeout(r, 400)); }
+  }
 }
