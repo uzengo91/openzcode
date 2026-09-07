@@ -28,13 +28,13 @@ use codex_api::RetryConfig;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
 use codex_client::EncodedJsonBody;
+use codex_client::HttpTransport;
 use codex_client::Request;
 use codex_client::RequestBody;
 use codex_client::RequestCompression;
+use codex_client::StreamResponse;
 use codex_client::run_with_retry;
-use codex_login::default_client::add_originator_header;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_tools::ToolSpec;
@@ -54,39 +54,15 @@ use tracing::debug;
 use tracing::trace;
 
 use crate::client_common::Prompt;
-use crate::responses_metadata::CodexResponsesMetadata;
 
 const CHAT_COMPLETIONS_PATH: &str = "/chat/completions";
 const RESPONSE_STREAM_CHANNEL_CAPACITY: usize = 1600;
-
-/// Builds the extra headers attached to Chat Completions requests.
-///
-/// Mirrors the Responses-path header construction minus Responses-specific
-/// conventions that non-OpenAI chat gateways reject or ignore. Session
-/// telemetry/tracing headers and the originator are still attached.
-pub(crate) fn build_chat_headers(
-    originator: &str,
-    responses_metadata: &CodexResponsesMetadata,
-    request_telemetry: Option<&Arc<dyn ApiRequestTelemetry>>,
-) -> HeaderMap {
-    let _ = request_telemetry;
-    let mut headers = HeaderMap::new();
-    add_originator_header(&mut headers, originator);
-    if let Ok(header_value) = HeaderValue::from_str(&responses_metadata.thread_id) {
-        headers.insert("x-client-request-id", header_value);
-    }
-    headers.extend(codex_api::build_session_headers(
-        Some(responses_metadata.session_id.to_string()),
-        Some(responses_metadata.thread_id.to_string()),
-    ));
-    headers
-}
 
 /// Content entries for a chat message. Either a plain string or an array of
 /// typed content parts (required for image inputs).
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
-enum ChatContent {
+pub(crate) enum ChatContent {
     Text(String),
     Parts(Vec<ChatContentPart>),
 }
@@ -97,7 +73,7 @@ fn chat_text_content(text: String) -> ChatContent {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum ChatContentPart {
+pub(crate) enum ChatContentPart {
     Text {
         text: String,
     },
@@ -107,13 +83,13 @@ enum ChatContentPart {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct ChatImageUrl {
+pub(crate) struct ChatImageUrl {
     url: String,
 }
 
 /// A single entry in the chat `messages` array.
 #[derive(Debug, Clone, Serialize)]
-struct ChatMessage {
+pub(crate) struct ChatMessage {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<ChatContent>,
@@ -126,7 +102,7 @@ struct ChatMessage {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct ChatToolCall {
+pub(crate) struct ChatToolCall {
     /// Echoed per-call identity. Use the upstream call id when replaying a
     /// recorded FunctionCall so the matching tool output lines back up.
     id: String,
@@ -136,7 +112,7 @@ struct ChatToolCall {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct ChatToolCallFunction {
+pub(crate) struct ChatToolCallFunction {
     name: String,
     arguments: String,
 }
@@ -159,7 +135,7 @@ struct ChatFunctionDefinition {
 }
 
 #[derive(Debug, Serialize)]
-struct ChatCompletionRequest {
+pub(crate) struct ChatCompletionRequest {
     model: String,
     messages: Vec<ChatMessage>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -169,7 +145,7 @@ struct ChatCompletionRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct ChatStreamOptions {
+pub(crate) struct ChatStreamOptions {
     include_usage: bool,
 }
 
@@ -199,7 +175,7 @@ fn chat_tools_from_prompt(tools: &[ToolSpec]) -> Vec<ChatTool> {
 fn content_items_to_chat_parts(content: &[ContentItem]) -> ChatContent {
     let mut parts: Vec<ChatContentPart> = Vec::with_capacity(content.len());
     let mut text_only = String::new();
-    let mut is_text_only = true;
+    let mut has_images = false;
     for item in content {
         match item {
             ContentItem::InputText { text } | ContentItem::OutputText { text } => {
@@ -210,7 +186,7 @@ fn content_items_to_chat_parts(content: &[ContentItem]) -> ChatContent {
                 parts.push(ChatContentPart::Text { text: text.clone() });
             }
             ContentItem::InputImage { image_url, .. } => {
-                is_text_only = false;
+                has_images = true;
                 parts.push(ChatContentPart::ImageUrl {
                     image_url: ChatImageUrl {
                         url: image_url.clone(),
@@ -223,10 +199,10 @@ fn content_items_to_chat_parts(content: &[ContentItem]) -> ChatContent {
             }
         }
     }
-    if is_text_only {
-        chat_text_content(text_only)
-    } else {
+    if has_images {
         ChatContent::Parts(parts)
+    } else {
+        chat_text_content(text_only)
     }
 }
 
@@ -236,20 +212,6 @@ fn function_call_output_text(output: &codex_protocol::models::FunctionCallOutput
         None => serde_json::to_string(&output.body)
             .unwrap_or_else(|_| String::from("<unserializable tool output>")),
     }
-}
-
-/// Converts Responses `ContentItem`s from a tool output payload to chat text.
-fn output_content_items_to_text(
-    items: &[FunctionCallOutputContentItem],
-) -> Option<String> {
-    let segments = items
-        .iter()
-        .filter_map(|item| match item {
-            FunctionCallOutputContentItem::InputText { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    (!segments.is_empty()).then(|| segments.join("\n"))
 }
 
 /// Translates the conversation history (`Prompt.input`) into chat messages.
@@ -453,6 +415,7 @@ struct ChatChunkChoice {
 #[derive(Debug, Deserialize, Default)]
 struct ChatDelta {
     #[serde(default)]
+    #[allow(dead_code)]
     role: Option<String>,
     #[serde(default)]
     content: Option<String>,
@@ -545,7 +508,10 @@ fn handle_chat_data(
     if let Some(chunk_usage) = chunk.usage {
         *usage = Some(chunk_usage);
     }
-    let Some(choice) = chunk.choices.into_iter().next() else {
+    let choice = chunk
+        .choices
+        .and_then(|choices| choices.into_iter().next());
+    let Some(choice) = choice else {
         return Vec::new();
     };
     if choice
@@ -553,16 +519,17 @@ fn handle_chat_data(
         .as_deref()
         .is_some_and(|reason| !reason.is_empty())
     {
-        *finish_reason = choice.finish_reason.clone();
+        *finish_reason = choice.finish_reason;
     }
     let mut events = Vec::new();
-    if let Some(content) = choice.delta.content
+    let delta = choice.delta;
+    if let Some(content) = delta.content
         && !content.is_empty()
     {
         *text_seen = true;
         events.push(ResponseEvent::OutputTextDelta(content));
     }
-    if let Some(delta_calls) = choice.delta.tool_calls {
+    if let Some(delta_calls) = delta.tool_calls {
         for call in delta_calls {
             let index = call.index.unwrap_or(0);
             let entry = tool_calls.entry(index).or_default();
@@ -727,7 +694,7 @@ fn http_status_of(error: &TransportError) -> Option<StatusCode> {
 /// Converts a `StreamResponse` into the shared `ResponseStream`, mirroring
 /// `codex_api::sse::spawn_response_stream` but with chat semantics.
 fn spawn_chat_response_stream(
-    stream_response: codex_api::StreamResponse,
+    stream_response: StreamResponse,
     idle_timeout: std::time::Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
 ) -> ApiResponseStream {

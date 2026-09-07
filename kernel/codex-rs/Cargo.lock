@@ -2960,6 +2960,7 @@ dependencies = [
  "async-channel",
  "base64 0.22.1",
  "bm25",
+ "bytes",
  "chrono",
  "codex-agent-graph-store",
  "codex-agent-roles",

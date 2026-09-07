@@ -2074,16 +2074,19 @@ impl ModelClientSession {
                 )
                 .await
             }
-            WireApi::Chat => self.stream_chat_api(
-                prompt,
-                model_info,
-                session_telemetry,
-                effort,
-                summary,
-                service_tier,
-                responses_metadata,
-                inference_trace,
-            ),
+            WireApi::Chat => {
+                self.stream_chat_api(
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                    effort,
+                    summary,
+                    service_tier,
+                    responses_metadata,
+                    inference_trace,
+                )
+                .await
+            }
         }
     }
 
@@ -2242,7 +2245,7 @@ impl ModelClientSession {
             /*auth_mode*/ None,
             self.client.state.originator.clone(),
             /*log_user_prompts*/ false,
-            "unknown",
+            /*terminal_type*/ "unknown".to_string(),
             self.client.state.session_source.clone(),
         );
         map_response_events(
