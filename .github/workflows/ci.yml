@@ -12,6 +12,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # ubuntu 是准入门禁; macos/windows runner 无桌面会话/权限差异, smoke 结果仅作参考
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
