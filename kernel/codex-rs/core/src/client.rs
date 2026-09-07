@@ -2074,7 +2074,185 @@ impl ModelClientSession {
                 )
                 .await
             }
+            WireApi::Chat => self.stream_chat_api(
+                prompt,
+                model_info,
+                session_telemetry,
+                effort,
+                summary,
+                service_tier,
+                responses_metadata,
+                inference_trace,
+            ),
         }
+    }
+
+    /// Streams a turn via the Chat Completions API.
+    ///
+    /// Used by OpenAI-compatible providers that only implement the classic
+    /// `POST /chat/completions` protocol. Auth recovery and retries reuse the
+    /// same machinery as the Responses HTTP path.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(
+        name = "model_client.stream_chat_api",
+        level = "info",
+        skip_all,
+        fields(
+            model = %model_info.slug,
+            wire_api = "chat",
+            transport = "chat_http",
+            http.method = "POST",
+            api.path = "/chat/completions",
+            turn.has_metadata_header = responses_metadata.has_turn_metadata()
+        )
+    )]
+    async fn stream_chat_api(
+        &self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        service_tier: Option<String>,
+        responses_metadata: &CodexResponsesMetadata,
+        inference_trace: &InferenceTraceContext,
+    ) -> Result<ResponseStream> {
+        let _ = (effort, summary, service_tier);
+        let auth_manager = self.client.state.provider.auth_manager();
+        let mut auth_recovery = auth_manager
+            .as_ref()
+            .map(AuthManager::unauthorized_recovery);
+        let mut provider_auth_recovery_attempted = false;
+        let mut pending_retry = PendingUnauthorizedRetry::default();
+        loop {
+            let client_setup = self.client.current_client_setup().await?;
+            let transport = self
+                .client
+                .build_api_transport(&client_setup.api_provider, "/chat/completions")?;
+            let request_auth_context = AuthRequestTelemetryContext::new(
+                client_setup.auth.as_ref().map(CodexAuth::auth_mode),
+                client_setup.api_auth.as_ref(),
+                client_setup.agent_identity_telemetry.clone(),
+                pending_retry,
+            );
+            let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(
+                session_telemetry,
+                request_auth_context,
+                RequestRouteTelemetry::for_endpoint("/chat/completions"),
+                self.client.state.auth_env_telemetry.clone(),
+            );
+            let mut extra_headers = build_responses_headers(
+                self.client.state.beta_features_header.as_deref(),
+                Some(&self.turn_state),
+            );
+            add_originator_header(&mut extra_headers, self.client.state.originator.as_str());
+            extra_headers.extend(
+                self.client
+                    .build_responses_compatibility_headers(responses_metadata),
+            );
+            if let Some(header_value) = self.client.generate_attestation_header_for().await {
+                extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
+            }
+            let inference_trace_attempt = inference_trace.start_attempt();
+            let attempt_headers = extra_headers.clone();
+            let result = crate::client_chat::stream_chat_completions(
+                transport,
+                client_setup.api_provider.base_url.clone(),
+                client_setup.api_auth.clone(),
+                attempt_headers,
+                client_setup.api_provider.retry.clone(),
+                client_setup.api_provider.stream_idle_timeout,
+                prompt,
+                &model_info.slug,
+                session_telemetry,
+                Some(request_telemetry.clone()),
+                Some(sse_telemetry.clone()),
+                &inference_trace_attempt,
+            )
+            .await;
+
+            match result {
+                Ok(stream) => {
+                    return Ok(self.map_chat_stream(stream));
+                }
+                Err(ApiError::Transport(unauthorized_transport))
+                    if self
+                        .client
+                        .state
+                        .provider
+                        .is_recoverable_auth_error(&unauthorized_transport) =>
+                {
+                    let response_debug_context =
+                        extract_response_debug_context(&unauthorized_transport);
+                    inference_trace_attempt.record_failed(
+                        &unauthorized_transport,
+                        response_debug_context.request_id.as_deref(),
+                        /*output_items*/ &[],
+                    );
+                    pending_retry = PendingUnauthorizedRetry::from_recovery(
+                        handle_unauthorized(
+                            unauthorized_transport,
+                            &mut auth_recovery,
+                            &mut provider_auth_recovery_attempted,
+                            session_telemetry,
+                            &self.client.state.provider,
+                            self.client.event_sender.as_ref(),
+                            responses_metadata.turn_id.as_deref(),
+                        )
+                        .await?,
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    let response_debug_context =
+                        extract_response_debug_context_from_api_error(&err);
+                    let err = self.client.state.provider.map_api_error(err);
+                    inference_trace_attempt.record_failed(
+                        &err,
+                        response_debug_context.request_id.as_deref(),
+                        /*output_items*/ &[],
+                    );
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+    /// Wraps a raw chat `ResponseStream` in the same mapper used for Responses
+    /// streams so telemetry, rollout tracing, and websocket caching behavior
+    /// stay consistent. There is no websocket caching on the chat path.
+    fn map_chat_stream(
+        &self,
+        api_stream: codex_api::ResponseStream,
+    ) -> ResponseStream {
+        let codex_api::ResponseStream {
+            rx_event,
+            upstream_request_id,
+        } = api_stream;
+        let api_stream = codex_api::ResponseStream {
+            rx_event,
+            upstream_request_id: None,
+        };
+        let session_telemetry = SessionTelemetry::new(
+            self.client.state.thread_id,
+            "chat",
+            "chat",
+            /*account_id*/ None,
+            /*account_email*/ None,
+            /*auth_mode*/ None,
+            self.client.state.originator.clone(),
+            /*log_user_prompts*/ false,
+            "unknown",
+            self.client.state.session_source.clone(),
+        );
+        map_response_events(
+            upstream_request_id,
+            api_stream,
+            session_telemetry,
+            InferenceTraceAttempt::disabled(),
+            Arc::clone(&self.client.state.provider),
+        )
+        .0
     }
 
     /// Permanently disables WebSockets for this Codex session and resets WebSocket state.
