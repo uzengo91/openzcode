@@ -1,6 +1,6 @@
 {
   "name": "openzcode",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "description": "OpenZCode — single-binary dual-form coding agent (CLI + Electron App), MVP inspired by ZCode architecture",
   "workspaces": [
