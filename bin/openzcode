@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# OpenZCode launcher — 转发到 vendored Codex 内核构建产物(codex-tui)。
+# 优先级: 仓库内 release 构建 > PATH 中的 openzcode/codex。
+set -euo pipefail
+dir="$(cd "$(dirname "$0")/.." && pwd)"
+
+for candidate in \
+  "$dir/kernel/codex-rs/target/release/codex-tui" \
+  "$dir/kernel/codex-rs/target/debug/codex-tui" \
+  "$(command -v openzcode || true)" \
+  "$(command -v codex || true)"; do
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    exec "$candidate" "$@"
+  fi
+done
+
+echo "OpenZCode: 未找到内核二进制。" >&2
+echo "先构建: cd kernel/codex-rs && cargo build --release -p codex-tui" >&2
+echo "GLM 配置: cp kernel/config.examples/glm.toml ~/.codex/config.toml (按需修改)" >&2
+exit 1

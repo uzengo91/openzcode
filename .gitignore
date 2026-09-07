@@ -4,3 +4,7 @@ release/
 .oz-itest/
 *.log
 .DS_Store
+kernel/codex-rs/target/
+kernel/.git/
+kernel/.gitignore
+kernel/.cargo/

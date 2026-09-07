@@ -1,0 +1,49 @@
+name: Kernel CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "kernel/**"
+      - ".github/workflows/kernel-ci.yml"
+  pull_request:
+    paths:
+      - "kernel/**"
+
+jobs:
+  kernel:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: kernel/codex-rs
+
+      - name: Build codex-tui
+        working-directory: kernel/codex-rs
+        run: cargo build --release -p codex-tui
+
+      - name: Smoke --version via launcher
+        shell: bash
+        run: |
+          chmod +x bin/openzcode || true
+          ./bin/openzcode --version | head -3
+
+      - name: Upload kernel binary
+        if: matrix.os != 'ubuntu-latest' || github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openzcode-kernel-${{ matrix.os }}
+          path: |
+            kernel/codex-rs/target/release/codex-tui
+            kernel/codex-rs/target/release/codex-tui.exe
