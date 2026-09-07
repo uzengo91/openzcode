@@ -1,7 +1,7 @@
-# PLAN · OpenZCode v0.5「日常主力」
+# PLAN · OpenZCode v0.5「日常主力」✅ 已完成并验收（v0.5.0, 2026-09-07）
 
 > 对应 ROADMAP P0（9 项）+ GUI 贴近 ZCode。开发方式：三条并行线（A 语义化电脑操作 / B Hooks / C 记忆）+ 主线（其余功能 + GUI + 集成）。
-> 每项附验收标准；最终以「按 plan 验收 + 集成测试全绿」收口。
+> **验收结果**：CI 60/60 · E2E 34/34 · 产物集成 18/18（官方 Release bundle）· GUI 数据源 RPC 12 项全通。逐项核对见文末「验收记录」。
 
 ## 0. 功能拆解与分工
 
@@ -51,3 +51,24 @@
 - 线B 产出 `src/hooks.js`：`loadHooks(ctx) → {preToolUse(name,input), postToolUse(name,input,result), sessionStart(), sessionStop(), permissionRequest()}`，全部返回 Promise，deny 形如 `{deny:true, reason}`；loop.js 仅在工具执行前后各插一个 await 点（主线集成时合入，避免 B 直接改 loop 冲突）。
 - 线C 产出 `src/memory.js`：`memoryDir(workspace)`, `listIndex()`, `read(name)`, `write(name, body, description)`, `promptSection()`；工具注册走 tools.js 数组尾部追加（与主线无冲突）。
 - 主线新工具统一追加在 tools.js 的 COMPUTER_TOOLS/BROWSER_TOOLS 之后；loop.js 的 hook 插点、plan 拦截、compact 触发点集中一次合入。
+
+---
+
+## 验收记录（2026-09-07, v0.5.0）
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| A1 元素树 | ✅(降级达标) | computer_app_state 在 AX 未授权时返回窗口级可点击树(e1/e2 + 坐标), axStatus 给出授权指引; mac 真机验证 |
+| A2 元素操作/windows/clipboard | ✅ | 8 新工具注册; clipboard_write→read 往返 ✓(CI); computer_click_ref 取元素中心(真机) |
+| B1/B2 Hooks | ✅ | CI: hooks/list 发现 ✓ + 真实 .sh/.js 触发; E2E: PreToolUse deny 被模型观察到并应变(DB 留痕 "被 hook 拦截"); 三级优先级(project>user)自验 |
+| C1/C2 记忆 | ✅ | CI: memory write/list/read(含[[链接]]) ✓; promptSection 注入; 线C自验 36 断言 |
+| M1 WebSearch | ✅ | Bing 国际版解析真实返回 playwright 官方链接(E2E 覆盖链路) |
+| M2 AskUserQuestion | ✅ | 工具+question_request/resolved 事件+GUI 选项卡+RPC session/answer |
+| M3 Plan 模式 | ✅ | 写类工具拦截(WRITE_CLASS_TOOLS) + plan_request/approvePlan 审批流 + GUI 计划卡 |
+| M4 子代理 | ✅ | E2E: Agent 工具→subagent_started→Explore 只读→结论回填(含文件内容) 3 断言全过 |
+| M5 compact | ✅ | 真实 LLM 压缩验证: 8→4 条, 结构化摘要(目标/步骤/文件/下一步); auto 70% 阈值 + /compact + session/compact RPC |
+| M6 fork/history | ✅ | CI: fork 复制消息+独立性 ✓, inputHistory ✓; TUI ↑/↓ 历史 |
+| G1-G3 GUI | ✅ | 侧栏(新建任务/自动化/插件市场/记忆/Hooks/搜索), Composer 工具条(模式/模型/effort), 计划/提问/子代理/压缩卡片; 数据源 RPC 12 项全通 |
+| 集成测试 | ✅ | CI 60/60 + E2E 34/34 + 官方产物 18/18 |
+
+**已知限制（记录）**：macOS/Windows CI runner 无桌面会话，语义层完整断言仅在 ubuntu(门禁)+真实 mac 开发机执行；Windows/Linux 的 AX/UIA/AT-SPI 驱动已就位但未经真机验证。
