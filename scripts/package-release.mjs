@@ -35,6 +35,15 @@ for (const f of ["README.md", "README.en.md", "LICENSE"]) cp(path.join(ROOT, f),
 fs.cpSync(path.join(ROOT, "examples"), path.join(stageDir, "examples"), { recursive: true });
 // official marketplace (localPath installs work offline within the bundle)
 fs.cpSync(path.join(ROOT, "marketplace"), path.join(stageDir, "marketplace"), { recursive: true });
+// kernel binaries (V2): release/kernel/* staged by CI, or local build
+const kernelStage = path.join(ROOT, "release", "kernel");
+if (fs.existsSync(kernelStage)) {
+  fs.cpSync(kernelStage, path.join(stageDir, "kernel"), { recursive: true });
+}
+const localKernel = path.join(ROOT, "kernel/codex-rs/target/release/codex-tui");
+if (fs.existsSync(localKernel)) {
+  fs.cpSync(localKernel, path.join(stageDir, "kernel", "openzcode-local"), { recursive: false });
+}
 
 // Electron app source (renderer needs no build step)
 const appFiles = ["main.js", "preload.js", "package.json"];

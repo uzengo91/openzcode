@@ -29,6 +29,19 @@ jobs:
       - name: Smoke test before release (no LLM)
         run: node scripts/test-ci.mjs
 
+      - name: Build kernel binary (ubuntu)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+      - name: Build codex-tui
+        working-directory: kernel/codex-rs
+        run: cargo build --release -p codex-tui
+      - name: Stage kernel binary into bundle
+        run: |
+          mkdir -p release/kernel
+          cp kernel/codex-rs/target/release/codex-tui release/kernel/openzcode-linux-x64
+          chmod +x release/kernel/openzcode-linux-x64
+
       - name: Package release bundle
         run: node scripts/package-release.mjs
         env:
