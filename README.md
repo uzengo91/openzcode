@@ -124,6 +124,8 @@ npm run package          # 打 release zip
 - `test:artifact` 是最终验收门：用**构建产物**（`OPENZCODE_BUNDLE` 可指向 release 解压出的 openzcode.cjs）驱动 agent，把**本仓库**作为工作区 —— 模型要读取真实源码并写入 `.oz-itest/`（gitignored），断言逐字节与仓库真值一致；同时验证 **MCP 工具调用**（引擎加载配置的 MCP server，LLM 决策调用 `mcp__calc__add` 并核验结果）。
 - `test:ci` 覆盖 MCP 双 transport（stdio + Streamable HTTP 的握手/tools list/tools call）、技能发现与 frontmatter、命令展开（$ARGUMENTS/$1）、插件安装/移除/启停 —— 全程无 LLM、无外网。
 
+- [Roadmap · 对标 ZCode 的差距分析与路线图](ROADMAP.md)
+
 ## 电脑操作 与 浏览器控制
 
 **电脑操作**（零原生依赖，按平台自动选择后端，危险操作需审批）：

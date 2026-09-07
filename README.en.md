@@ -123,6 +123,8 @@ npm run package          # build the release zip
 - `test:e2e` and `test:artifact` need a real model service: set `OPENZCODE_TEST_API_KEY` (optionally `OPENZCODE_TEST_BASE_URL`, `OPENZCODE_TEST_MODEL`), or configure a default provider in `~/.openzcode/config.json`. Keys never enter the repository.
 - `test:artifact` is the final acceptance gate: it drives the agent with the **built artifact** (`OPENZCODE_BUNDLE` may point at the openzcode.cjs extracted from a release zip) using **this repository** as the workspace — the model must read real source files (`packages/cli/src/version.js`, `README.md`, `packages/app/package.json`) and write extracted facts into `.oz-itest/` (gitignored); assertions compare the bytes on disk against ground truth parsed from the repo itself.
 
+- [Roadmap · Gap analysis vs ZCode and the roadmap](ROADMAP.md)
+
 ## Computer Use & Browser Control
 
 **Computer use** (zero native dependencies; per-platform backends; dangerous ops require approval):
